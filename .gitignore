@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.env
+
+# Node
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+
+# Logs and local tooling
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Big/raw datasets (keep repo lightweight)
+old data/
+new data/
+new_raw_data/
+new_processed_data/
+processed/sensor/
+
+# Keep only inference-ready feature artifacts
+processed/*
+!processed/features/
+processed/features/*
+!processed/features/rolling_features_demo.parquet
+!processed/features/rolling_feature_columns.txt
+
+# Keep only inference model artifact
+models/*
+!models/lightgbm_scrap_risk_wide.pkl
