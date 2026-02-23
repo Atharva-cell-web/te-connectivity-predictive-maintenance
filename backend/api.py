@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from run_realtime_check import run
-from data_access import get_recent_window
+from data_access import build_control_room_payload, get_recent_window
 from forecasting import generate_forecast
 from config_limits import SAFE_LIMITS
 import pandas as pd
@@ -28,6 +28,27 @@ def get_machine_status(machine_id: str):
     except Exception as e:
         print(f"Error in Status API: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/control-room/{machine_id}")
+def get_control_room_data(
+    machine_id: str,
+    time_window: int = Query(default=240, ge=30, le=1440),
+):
+    """
+    Returns a unified payload for Control Room sections:
+    machine info, summary stats, health state, timeline, and safe limits.
+    """
+    try:
+        return build_control_room_payload(machine_id=machine_id, time_window=time_window)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error in Control Room API: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/trend/{machine_id}/{parameter}")
 def get_trend_data(machine_id: str, parameter: str):

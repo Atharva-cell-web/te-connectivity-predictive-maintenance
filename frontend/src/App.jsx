@@ -1,268 +1,554 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-import { 
-  LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, PieChart, Pie, Cell 
-} from 'recharts';
-import { 
-  Activity, Thermometer, Gauge, AlertTriangle, CheckCircle, Zap, ShieldAlert, Bug, ChevronDown 
-} from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import axios from "axios";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { Activity, AlertTriangle, Gauge, Settings2 } from "lucide-react";
 
-// --- CONFIGURATION ---
-const API_BASE = "http://127.0.0.1:8080"; 
+const API_BASE = "http://127.0.0.1:8080";
+const FUTURE_RISK_THRESHOLD = 0.6;
 
-// --- COMPONENTS ---
+const MACHINE_OPTIONS = [
+  { value: "M-231", label: "M-231" },
+  { value: "M-471", label: "M-471" },
+  { value: "M-607", label: "M-607" },
+  { value: "M-612", label: "M-612" },
+];
 
-const StatusGauge = ({ riskLevel }) => {
-  const data = [
-    { name: 'Risk', value: riskLevel * 100 },
-    { name: 'Safe', value: 100 - (riskLevel * 100) },
-  ];
-  const getColor = (risk) => {
-    if (risk < 0.3) return "#10b981"; 
-    if (risk < 0.7) return "#f59e0b"; 
-    return "#ef4444"; 
-  };
+const TIME_WINDOW_OPTIONS = [
+  { value: 60, label: "Past 1h + Future 15m" },
+  { value: 120, label: "Past 2h + Future 30m" },
+  { value: 240, label: "Past 4h + Future 1h" },
+  { value: 360, label: "Past 6h + Future 1h30m" },
+];
+
+const toNumber = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const mergeLimits = (safeLimits, overrides) => {
+  const merged = { ...(safeLimits || {}) };
+  Object.entries(overrides || {}).forEach(([sensor, override]) => {
+    merged[sensor] = {
+      ...(merged[sensor] || {}),
+      ...override,
+    };
+  });
+  return merged;
+};
+
+const detectBreaches = (latestSensors, limits) => {
+  const breaches = [];
+  Object.entries(latestSensors || {}).forEach(([sensor, rawValue]) => {
+    const value = toNumber(rawValue);
+    const limit = limits?.[sensor];
+    if (value === null || !limit) {
+      return;
+    }
+    const minValue = toNumber(limit.min);
+    const maxValue = toNumber(limit.max);
+    const span = Math.max(
+      (maxValue ?? value) - (minValue ?? value),
+      Math.abs(maxValue ?? 1),
+      1,
+    );
+
+    if (maxValue !== null && value > maxValue) {
+      breaches.push({
+        sensor,
+        direction: "above",
+        value,
+        threshold: maxValue,
+        severity: (value - maxValue) / span,
+      });
+      return;
+    }
+    if (minValue !== null && value < minValue) {
+      breaches.push({
+        sensor,
+        direction: "below",
+        value,
+        threshold: minValue,
+        severity: (minValue - value) / span,
+      });
+    }
+  });
+
+  return breaches.sort((a, b) => b.severity - a.severity);
+};
+
+const formatClock = (timestamp) => {
+  if (!timestamp || typeof timestamp !== "string") {
+    return "";
+  }
+  return timestamp.slice(11, 16);
+};
+
+function GlobalHeader({
+  machineId,
+  timeWindowMinutes,
+  onMachineChange,
+  onTimeWindowChange,
+  healthStatus,
+}) {
+  const statusClass =
+    healthStatus === "HIGH"
+      ? "border-red-500 bg-red-500/15 text-red-300"
+      : healthStatus === "MEDIUM"
+        ? "border-amber-500 bg-amber-500/15 text-amber-300"
+        : "border-emerald-500 bg-emerald-500/15 text-emerald-300";
+
   return (
-    <div className="relative h-48 flex flex-col items-center justify-center">
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie
-            data={data} cx="50%" cy="70%" startAngle={180} endAngle={0}
-            innerRadius={60} outerRadius={80} paddingAngle={0} dataKey="value" stroke="none"
-          >
-            <Cell fill={getColor(riskLevel)} />
-            <Cell fill="#1f2937" />
-          </Pie>
-        </PieChart>
-      </ResponsiveContainer>
-      <div className="absolute bottom-6 text-center">
-        <div className="text-3xl font-bold text-white">{(riskLevel * 100).toFixed(1)}%</div>
-        <div className="text-xs text-gray-400 uppercase tracking-wider">Scrap Probability</div>
+    <header className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-700 bg-slate-900/70 px-5 py-4">
+      <div>
+        <h1 className="text-xl font-semibold text-slate-100">Predictive Maintenance Control Room</h1>
+        <p className="text-xs text-slate-400">Unified machine health, root cause, and telemetry view</p>
       </div>
-    </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <select
+          value={machineId}
+          onChange={(event) => onMachineChange(event.target.value)}
+          className="rounded-md border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none"
+        >
+          {MACHINE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={timeWindowMinutes}
+          onChange={(event) => onTimeWindowChange(Number(event.target.value))}
+          className="rounded-md border border-slate-600 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none"
+        >
+          {TIME_WINDOW_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <span className={`rounded-md border px-3 py-2 text-xs font-semibold ${statusClass}`}>
+          STATUS: {healthStatus}
+        </span>
+      </div>
+    </header>
   );
-};
+}
 
-const TelemetryCard = ({ icon: Icon, label, value, unit, color = "text-blue-400" }) => (
-  <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 flex items-center justify-between">
-    <div>
-      <div className="text-gray-500 text-xs uppercase mb-1">{label}</div>
-      <div className="text-xl font-mono text-white font-bold">{value} <span className="text-sm text-gray-500">{unit}</span></div>
-    </div>
-    <div className={`p-2 rounded-full bg-gray-700/50 ${color}`}>
-      <Icon size={20} />
-    </div>
-  </div>
-);
+function SystemHealthMonitor({ timeline, riskScore }) {
+  const chartData = useMemo(
+    () =>
+      (timeline || []).map((point) => {
+        const risk = toNumber(point.risk_score) ?? 0;
+        const alertDot = point.is_scrap_actual === 1 || (point.is_future && risk > FUTURE_RISK_THRESHOLD);
+        return {
+          ...point,
+          pastRisk: point.is_future ? null : risk,
+          futureRisk: point.is_future ? risk : null,
+          alertDot,
+        };
+      }),
+    [timeline],
+  );
 
-const SystemHealthChart = ({ data }) => {
-  if (!data || data.length === 0) return <div className="h-full flex items-center justify-center text-gray-500">Loading Trend...</div>;
+  if (!chartData.length) {
+    return <div className="flex h-64 items-center justify-center text-sm text-slate-400">No timeline data available.</div>;
+  }
 
-  const firstRow = data[0];
-  const keys = Object.keys(firstRow);
-  const dataKey = keys.find(k => k !== 'time' && k !== 'timestamp' && k !== 'machine_id') || "Injection_pressure";
+  const renderAlertDot = (props) => {
+    const { cx, cy, payload } = props;
+    if (!payload?.alertDot) {
+      return null;
+    }
+    return <circle cx={cx} cy={cy} r={4} fill="#ef4444" stroke="#fee2e2" strokeWidth={1} />;
+  };
 
   return (
-    <div className="h-full w-full relative">
-      <h3 className="text-white font-semibold flex items-center gap-2 mb-2">
-        <Activity size={16} className="text-green-400" /> 
-        System Health Monitor: {dataKey.replace(/_/g, ' ')}
-      </h3>
+    <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-200">
+          <Activity size={16} className="text-cyan-300" />
+          Section A: System Health Monitor
+        </h2>
+        <div className="text-xs text-slate-400">Current risk score: {(riskScore * 100).toFixed(1)}%</div>
+      </div>
+      <div className="h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+            <XAxis dataKey="timestamp" tickFormatter={formatClock} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+            <YAxis domain={[0, 1]} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+            <Tooltip
+              contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155", color: "#e2e8f0" }}
+              formatter={(value) => (toNumber(value) ?? 0).toFixed(3)}
+              labelFormatter={(value) => value}
+            />
+            <Line type="monotone" dataKey="pastRisk" stroke="#22d3ee" strokeWidth={2.4} dot={renderAlertDot} />
+            <Line
+              type="monotone"
+              dataKey="futureRisk"
+              stroke="#f59e0b"
+              strokeWidth={2.2}
+              strokeDasharray="7 5"
+              dot={renderAlertDot}
+            />
+            <ReferenceLine y={FUTURE_RISK_THRESHOLD} stroke="#ef4444" strokeDasharray="5 5" />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </section>
+  );
+}
+
+function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
+  const chartData = useMemo(() => {
+    if (!timeline || !timeline.length) return [];
+    
+    let lastPastIndex = -1;
+    timeline.forEach((point, index) => {
+      if (!point.is_future) lastPastIndex = index;
+    });
+
+    return timeline.map((point, index) => {
+      const val = toNumber(point.sensors?.[sensor]);
+      const isTransition = index === lastPastIndex;
       
-      <ResponsiveContainer width="100%" height="90%">
-        <AreaChart data={data}>
-          <defs>
-            <linearGradient id="colorGreen" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-              <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-            </linearGradient>
-          </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
-          <XAxis 
-            dataKey="time" 
-            stroke="#9ca3af" 
-            tick={{fontSize: 10}} 
-            interval={Math.floor(data.length / 5)} 
-          />
-          <YAxis hide domain={['auto', 'auto']} />
-          <Tooltip 
-            contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', color: '#fff' }}
-            itemStyle={{ color: '#10b981' }}
-          />
-          <ReferenceLine x="Now" stroke="white" strokeDasharray="3 3" label={{ value: "NOW", fill: 'white', fontSize: 10 }} />
-          <Area 
-            type="monotone" 
-            dataKey={dataKey} 
-            stroke="#10b981" 
-            strokeWidth={2}
-            fillOpacity={1} 
-            fill="url(#colorGreen)" 
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-    </div>
-  );
-};
+      return {
+        timestamp: point.timestamp,
+        pastValue: (!point.is_future || isTransition) ? val : null,
+        futureValue: (point.is_future || isTransition) ? val : null,
+      };
+    }).filter((point) => point.pastValue !== null || point.futureValue !== null); 
+    // ^ The filter is back, but it won't break the graph because the backend is now sending real future data!
+  }, [timeline, sensor]);
 
-const RootCauseChart = ({ parameter, data, limits }) => {
-  if (!data || data.length === 0) return null;
-  const dataKey = Object.keys(data[0]).find(k => k !== 'time' && k !== 'timestamp' && k !== 'machine_id') || parameter;
+  const limits = safeLimits?.[sensor] || {};
+  const minLimit = toNumber(limits.min);
+  const maxLimit = toNumber(limits.max);
 
   return (
-    <div className="h-full w-full bg-red-900/10 border border-red-500/30 rounded-lg p-4 relative overflow-hidden">
-      <div className="absolute top-0 left-0 w-1 h-full bg-red-500 animate-pulse"></div>
-      <h3 className="text-red-400 font-bold flex items-center gap-2 mb-2 uppercase text-sm tracking-wide">
-        <AlertTriangle size={16} /> 
-        Anomaly Detected: {parameter}
-      </h3>
-      <ResponsiveContainer width="100%" height="85%">
-        <LineChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#451a1a" />
-          <XAxis dataKey="time" stroke="#ef4444" tick={{fontSize: 10}} interval={Math.floor(data.length / 5)} />
-          <YAxis stroke="#ef4444" domain={['auto', 'auto']} fontSize={10} />
-          <Tooltip contentStyle={{ backgroundColor: '#450a0a', borderColor: '#ef4444', color: '#fff' }} />
-          {limits?.max && <ReferenceLine y={limits.max} stroke="#ef4444" strokeDasharray="5 5" label="MAX" />}
-          {limits?.min && <ReferenceLine y={limits.min} stroke="#ef4444" strokeDasharray="5 5" label="MIN" />}
-          <Line type="monotone" dataKey={dataKey} stroke="#ef4444" strokeWidth={3} dot={false} />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
+    <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-200">
+        <AlertTriangle size={16} className="text-amber-300" />
+        Section B: Root Cause Analyzer ({sensor})
+      </h2>
+      <div className="h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+            <XAxis dataKey="timestamp" tickFormatter={formatClock} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+            <YAxis domain={['auto', 'auto']} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+            <Tooltip
+              contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155", color: "#e2e8f0" }}
+              formatter={(value) => (toNumber(value) ?? 0).toFixed(3)}
+              labelFormatter={(value) => value}
+            />
+            {minLimit !== null && <ReferenceLine y={minLimit} stroke="#f97316" strokeDasharray="4 4" />}
+            {maxLimit !== null && <ReferenceLine y={maxLimit} stroke="#ef4444" strokeDasharray="4 4" />}
+            
+            <Line type="monotone" dataKey="pastValue" stroke="#60a5fa" strokeWidth={2.4} dot={false} connectNulls={true} />
+            <Line type="monotone" dataKey="futureValue" stroke="#f59e0b" strokeWidth={2.4} strokeDasharray="7 5" dot={false} connectNulls={true} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </section>
   );
-};
+}
 
-// --- MAIN APP ---
+function TelemetryPanel({ latestSensors, effectiveLimits, breaches, onLimitOverride }) {
+  const breachMap = useMemo(
+    () =>
+      (breaches || []).reduce((acc, entry) => {
+        acc[entry.sensor] = entry;
+        return acc;
+      }, {}),
+    [breaches],
+  );
+
+  const cards = Object.entries(latestSensors || {}).sort((a, b) => a[0].localeCompare(b[0]));
+
+  return (
+    <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-200">
+        <Gauge size={16} className="text-violet-300" />
+        Section C: Telemetry Panel
+      </h2>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {cards.map(([sensor, rawValue]) => {
+          const current = toNumber(rawValue);
+          const limits = effectiveLimits?.[sensor] || {};
+          const minValue = limits.min ?? "";
+          const maxValue = limits.max ?? "";
+          const breach = breachMap[sensor];
+          const warningClass = breach
+            ? "border-red-500 bg-red-950/60 shadow-[0_0_0_1px_rgba(239,68,68,0.3)] animate-pulse"
+            : "border-slate-700 bg-slate-950/60";
+
+          return (
+            <article key={sensor} className={`rounded-lg border p-3 ${warningClass}`}>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-200">{sensor}</h3>
+                {breach && <span className="text-[10px] font-semibold text-red-300">BREACH</span>}
+              </div>
+              <p className="font-mono text-lg text-slate-100">{current !== null ? current.toFixed(3) : "N/A"}</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <label className="text-[11px] text-slate-400">
+                  Min
+                  <input
+                    type="number"
+                    value={minValue}
+                    onChange={(event) => onLimitOverride(sensor, "min", event.target.value)}
+                    className="mt-1 w-full rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 outline-none"
+                  />
+                </label>
+                <label className="text-[11px] text-slate-400">
+                  Max
+                  <input
+                    type="number"
+                    value={maxValue}
+                    onChange={(event) => onLimitOverride(sensor, "max", event.target.value)}
+                    className="mt-1 w-full rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 outline-none"
+                  />
+                </label>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function PredictionSummary({ machineInfo, summaryStats, health, activeSensor }) {
+  return (
+    <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-200">
+        <Settings2 size={16} className="text-sky-300" />
+        Section D: Prediction Summary
+      </h2>
+      <div className="space-y-2 text-sm">
+        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
+          <span className="text-slate-400">Machine:</span> {machineInfo?.id}
+        </div>
+        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
+          <span className="text-slate-400">Tool ID:</span> {machineInfo?.tool_id}
+        </div>
+        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
+          <span className="text-slate-400">Part Number:</span> {machineInfo?.part_number}
+        </div>
+        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
+          <span className="text-slate-400">Past Scrap Detected:</span> {summaryStats?.past_scrap_detected ?? 0}
+        </div>
+        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
+          <span className="text-slate-400">Future Scrap Predicted:</span> {summaryStats?.future_scrap_predicted ?? 0}
+        </div>
+        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
+          <span className="text-slate-400">Health Status:</span> {health?.status}
+        </div>
+        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
+          <span className="text-slate-400">Health Risk Score:</span> {((health?.risk_score ?? 0) * 100).toFixed(1)}%
+        </div>
+        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
+          <span className="text-slate-400">Active Root Cause:</span> {activeSensor}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function App() {
-  // NEW: State for Machine Selection
   const [machineId, setMachineId] = useState("M-231");
-  const [status, setStatus] = useState(null);
-  const [mainTrend, setMainTrend] = useState([]);
-  const [failTrend, setFailTrend] = useState(null);
-  const [failParam, setFailParam] = useState(null);
-  const [failLimits, setFailLimits] = useState(null);
-  const [debugError, setDebugError] = useState(null);
+  const [timeWindowMinutes, setTimeWindowMinutes] = useState(240);
+  const [controlRoomData, setControlRoomData] = useState(null);
+  const [limitOverrides, setLimitOverrides] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchControlRoom = useCallback(async () => {
+    try {
+      setLoading(true);
+      const response = await axios.get(`${API_BASE}/api/control-room/${machineId}`, {
+        params: { time_window: timeWindowMinutes },
+      });
+      setControlRoomData(response.data);
+      setError(null);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [machineId, timeWindowMinutes]);
 
   useEffect(() => {
-    // Reset data when machine changes so graphs don't mix
-    setStatus(null); 
-    setMainTrend([]);
+    fetchControlRoom();
+    const intervalId = setInterval(fetchControlRoom, 15000);
+    return () => clearInterval(intervalId);
+  }, [fetchControlRoom]);
 
-    const fetchData = async () => {
-      try {
-        const statusRes = await axios.get(`${API_BASE}/api/status/${machineId}`);
-        setStatus(statusRes.data);
+  useEffect(() => {
+    setLimitOverrides({});
+  }, [machineId, timeWindowMinutes]);
 
-        const trendRes = await axios.get(`${API_BASE}/api/trend/${machineId}/Injection_pressure`);
-        
-        const formattedTrend = trendRes.data.data.map(d => ({
-          ...d,
-          time: new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        }));
-        setMainTrend(formattedTrend);
-        setDebugError(null);
+  const safeLimits = controlRoomData?.safe_limits || {};
+  const effectiveLimits = useMemo(() => mergeLimits(safeLimits, limitOverrides), [safeLimits, limitOverrides]);
+  const timeline = controlRoomData?.timeline || [];
 
-        if (statusRes.data.alert_level !== "LOW" && statusRes.data.violations.length > 0) {
-            const badParam = statusRes.data.violations[0].parameter;
-            setFailParam(badParam);
-            const failRes = await axios.get(`${API_BASE}/api/trend/${machineId}/${badParam}`);
-            const formattedFail = failRes.data.data.map(d => ({
-                ...d,
-                time: new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            }));
-            setFailTrend(formattedFail);
-            setFailLimits(failRes.data.limits);
-        } else {
-            setFailTrend(null);
-        }
+  const latestPastPoint = useMemo(() => {
+    const past = timeline.filter((point) => !point.is_future);
+    return past.length ? past[past.length - 1] : null;
+  }, [timeline]);
 
-      } catch (err) {
-        console.error("API Error:", err);
-        setDebugError(err.message);
+  const latestSensors = latestPastPoint?.sensors || {};
+  const breaches = useMemo(() => detectBreaches(latestSensors, effectiveLimits), [latestSensors, effectiveLimits]);
+
+  const activeRootCauses = useMemo(() => {
+    const apiRootCauses = controlRoomData?.current_health?.root_causes || [];
+    if (breaches.length) {
+      return breaches.map((entry) => entry.sensor);
+    }
+    return apiRootCauses.length ? apiRootCauses : ["Injection_pressure"];
+  }, [controlRoomData, breaches]);
+
+  const adjustedRiskScore = useMemo(() => {
+    const base = toNumber(controlRoomData?.current_health?.risk_score) ?? 0;
+    if (!breaches.length) {
+      return base;
+    }
+    const penalty = Math.min(0.35, breaches.length * 0.12);
+    return Math.min(1, base + penalty);
+  }, [controlRoomData, breaches]);
+
+  const displayTimeline = useMemo(() => {
+    if (!timeline.length) {
+      return [];
+    }
+    const futurePenalty = breaches.length ? Math.min(0.2, breaches.length * 0.05) : 0;
+    let lastPastIndex = -1;
+    timeline.forEach((point, index) => {
+      if (!point.is_future) {
+        lastPastIndex = index;
       }
+    });
+
+    return timeline.map((point, index) => {
+      let risk = toNumber(point.risk_score) ?? 0;
+      if (index === lastPastIndex) {
+        risk = Math.max(risk, adjustedRiskScore);
+      }
+      if (point.is_future) {
+        risk = Math.min(1, risk + futurePenalty);
+      }
+      return {
+        ...point,
+        risk_score: Number(risk.toFixed(4)),
+      };
+    });
+  }, [timeline, breaches.length, adjustedRiskScore]);
+
+  const summaryStats = useMemo(() => {
+    const base = controlRoomData?.summary_stats || { past_scrap_detected: 0, future_scrap_predicted: 0 };
+    const timelineFutureCount = displayTimeline.filter(
+      (point) => point.is_future && (toNumber(point.risk_score) ?? 0) > FUTURE_RISK_THRESHOLD,
+    ).length;
+    return {
+      past_scrap_detected: base.past_scrap_detected ?? 0,
+      future_scrap_predicted: Math.max(base.future_scrap_predicted ?? 0, timelineFutureCount),
     };
+  }, [controlRoomData, displayTimeline]);
 
-    fetchData();
-    const interval = setInterval(fetchData, 3000);
-    return () => clearInterval(interval);
-  }, [machineId]); // Re-run when machineId changes
+  const currentHealth = useMemo(() => {
+    let status = "LOW";
+    if (breaches.length || adjustedRiskScore >= FUTURE_RISK_THRESHOLD) {
+      status = "HIGH";
+    } else if (adjustedRiskScore >= 0.3) {
+      status = "MEDIUM";
+    }
+    return {
+      status,
+      risk_score: adjustedRiskScore,
+      root_causes: activeRootCauses,
+    };
+  }, [breaches.length, adjustedRiskScore, activeRootCauses]);
 
-  // Loading Screen
-  if (!status) return (
-    <div className="bg-gray-900 min-h-screen text-white flex flex-col items-center justify-center gap-4">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
-        <div>Connecting to {machineId}...</div>
-        {debugError && <div className="text-red-400 text-sm border border-red-800 p-2 rounded">Debug: {debugError}</div>}
-    </div>
-  );
+  const activeSensor = activeRootCauses[0] || "Injection_pressure";
 
-  const isCritical = status.alert_level !== "LOW";
+  const handleLimitOverride = useCallback((sensor, bound, rawValue) => {
+    setLimitOverrides((previous) => {
+      const next = { ...previous };
+      const parsed = rawValue === "" ? null : Number(rawValue);
+      const validValue = parsed !== null && Number.isFinite(parsed) ? parsed : null;
+
+      const sensorOverrides = { ...(next[sensor] || {}) };
+      if (validValue === null) {
+        delete sensorOverrides[bound];
+      } else {
+        sensorOverrides[bound] = validValue;
+      }
+
+      if (Object.keys(sensorOverrides).length === 0) {
+        delete next[sensor];
+      } else {
+        next[sensor] = sensorOverrides;
+      }
+      return next;
+    });
+  }, []);
+
+  if (loading && !controlRoomData) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
+        Loading Control Room data...
+      </div>
+    );
+  }
 
   return (
-    <div className="bg-gray-900 min-h-screen p-6 font-sans text-gray-100 flex flex-col">
-      
-      {/* HEADER */}
-      <header className="mb-6 flex justify-between items-center border-b border-gray-800 pb-4">
-        <div>
-           <h1 className="text-2xl font-bold text-white flex items-center gap-3">
-             <Zap className="text-yellow-400" fill="currentColor" />
-             Predictive Maintenance Console
-           </h1>
-           <p className="text-gray-500 text-xs mt-1 ml-9">LIVE MONITORING: {machineId}</p>
-        </div>
-        
-        {/* NEW: Machine Selector Dropdown */}
-        <div className="flex items-center gap-4">
-          <div className="relative">
-             <select 
-               value={machineId}
-               onChange={(e) => setMachineId(e.target.value)}
-               className="bg-gray-800 text-white font-mono border border-gray-600 rounded px-4 py-2 pr-8 appearance-none focus:outline-none focus:border-blue-500 cursor-pointer hover:bg-gray-700 transition"
-             >
-               <option value="M-231">M-231 (Line 1)</option>
-               <option value="M-471">M-471 (Line 2)</option>
-               <option value="M-607">M-607 (Line 3)</option>
-               <option value="M-612">M-612 (Line 4)</option>
-             </select>
-             <ChevronDown className="absolute right-2 top-3 text-gray-400 pointer-events-none" size={16} />
+    <main className="min-h-screen bg-slate-950 p-4 text-slate-100 md:p-6">
+      <div className="mx-auto flex max-w-[1500px] flex-col gap-4">
+        <GlobalHeader
+          machineId={machineId}
+          timeWindowMinutes={timeWindowMinutes}
+          onMachineChange={setMachineId}
+          onTimeWindowChange={setTimeWindowMinutes}
+          healthStatus={currentHealth.status}
+        />
+
+        {error && <div className="rounded-md border border-red-700 bg-red-950/50 px-4 py-2 text-sm text-red-200">{error}</div>}
+
+        <div className="grid grid-cols-12 gap-4">
+          <div className="col-span-12">
+            <SystemHealthMonitor timeline={displayTimeline} riskScore={currentHealth.risk_score} />
           </div>
 
-          <div className={`px-4 py-2 rounded font-bold ${isCritical ? 'bg-red-500/20 text-red-400 border border-red-500' : 'bg-green-500/20 text-green-400 border border-green-500'}`}>
-              STATUS: {status.alert_level}
+          <div className="col-span-12 xl:col-span-8">
+            <RootCauseAnalyzer timeline={displayTimeline} sensor={activeSensor} safeLimits={effectiveLimits} />
           </div>
-        </div>
-      </header>
 
-      {/* MAIN GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-grow">
-        <div className="lg:col-span-4 flex flex-col gap-6">
-            <div className="bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700 relative overflow-hidden">
-                <h2 className="text-gray-400 text-sm font-bold uppercase tracking-wider mb-2">Overall Machine Status</h2>
-                <StatusGauge riskLevel={status.ml_risk_probability} />
-                <div className="mt-4 text-center p-3 rounded bg-gray-900 border border-gray-700">
-                    <div className="text-gray-400 text-xs">CURRENT STATE</div>
-                    <div className={`text-lg font-bold ${isCritical ? 'text-red-400' : 'text-green-400'}`}>
-                        {isCritical ? "PREDICTIVE FAILURE DETECTED" : "OPTIMAL OPERATION"}
-                    </div>
-                </div>
-            </div>
-            <div className="grid grid-cols-1 gap-4">
-                <TelemetryCard icon={Thermometer} label="Cyl Temp Zone 3" value="210.4" unit="°C" color="text-orange-400" />
-                <TelemetryCard icon={Gauge} label="Injection Pressure" value="1420" unit="bar" color="text-blue-400" />
-            </div>
-        </div>
-
-        <div className="lg:col-span-8 flex flex-col gap-6">
-            <div className={`bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700 flex-1 min-h-[300px] transition-all duration-500 ${isCritical ? 'h-[45%]' : 'h-full'}`}>
-                <SystemHealthChart data={mainTrend} />
-            </div>
-
-            {isCritical && failTrend && (
-                <div className="flex-1 min-h-[300px] animate-in fade-in slide-in-from-bottom-10 duration-700">
-                    <RootCauseChart parameter={failParam} data={failTrend} limits={failLimits} />
-                </div>
-            )}
+          <div className="col-span-12 grid gap-4 xl:col-span-4">
+            <TelemetryPanel
+              latestSensors={latestSensors}
+              effectiveLimits={effectiveLimits}
+              breaches={breaches}
+              onLimitOverride={handleLimitOverride}
+            />
+            <PredictionSummary
+              machineInfo={controlRoomData?.machine_info}
+              summaryStats={summaryStats}
+              health={currentHealth}
+              activeSensor={activeSensor}
+            />
+          </div>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
 
