@@ -1,4 +1,5 @@
 import re
+import warnings
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -6,6 +7,10 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+from pandas.errors import PerformanceWarning
+
+# Silence pandas fragmentation warnings during forecasting
+warnings.filterwarnings("ignore", category=PerformanceWarning)
 
 from config_limits import ML_THRESHOLDS, SAFE_LIMITS
 
@@ -64,23 +69,18 @@ def _clean_limit_payload():
     return cleaned
 
 
-
 @lru_cache(maxsize=1)
 def _load_control_model_and_features():
     if not CONTROL_MODEL_PATH.exists():
         raise FileNotFoundError(f"Model not found at: {CONTROL_MODEL_PATH}")
 
-    # Load the LightGBM model
     model = joblib.load(CONTROL_MODEL_PATH)
     
-    # BULLETPROOF FIX: Ask the model exactly what 375 features it was trained on.
-    # This completely ignores the .txt file and guarantees a perfect shape match.
     if hasattr(model, "feature_name_"):
         features = model.feature_name_
     elif hasattr(model, "booster_"):
         features = model.booster_.feature_name()
     else:
-        # Emergency fallback (stripping the known meta-columns)
         with open(MODEL_FEATURES_PATH, "r") as f:
             features = [
                 line.strip() for line in f.readlines() 
@@ -92,7 +92,6 @@ def _load_control_model_and_features():
 
 @lru_cache(maxsize=1)
 def _load_sensor_forecaster():
-    """Load the lagged recursive sensor forecaster model + metadata."""
     if not FORECASTER_MODEL_PATH.exists():
         raise FileNotFoundError(f"Sensor forecaster not found: {FORECASTER_MODEL_PATH}")
     artifact = joblib.load(FORECASTER_MODEL_PATH)
@@ -185,7 +184,6 @@ def _build_machine_feb_history(machine_norm: str):
         history["is_scrap_actual"] = 0
     history["is_scrap_actual"] = pd.to_numeric(history["is_scrap_actual"], errors="coerce").fillna(0)
 
-    # Backfill missing risk from model if needed.
     missing_prob_mask = history["scrap_probability"].isna()
     if missing_prob_mask.any():
         model, model_features = _load_control_model_and_features()
@@ -272,110 +270,114 @@ def _infer_step_seconds(history: pd.DataFrame) -> int:
 
 
 def _generate_future_horizon(past_window: pd.DataFrame, future_minutes: int):
-    """Generate a future forecast using recursive AI sensor prediction with lag features."""
-    scrap_model, model_features = _load_control_model_and_features()
+    model, model_features = _load_control_model_and_features()
     model_features = list(model_features)
+    
     if past_window.empty:
         return pd.DataFrame(columns=["timestamp", "scrap_probability", "is_scrap_actual"])
 
     recent = past_window.sort_values("timestamp").tail(min(240, len(past_window))).copy()
-
-    # Ensure all needed columns exist and are numeric
-    all_columns = set(model_features + list(SAFE_LIMITS.keys()))
-    for feature in all_columns:
+    
+    for feature in model_features:
         if feature not in recent.columns:
             recent[feature] = 0.0
-        recent[feature] = pd.to_numeric(recent[feature], errors="coerce")
-        recent[feature] = recent[feature].ffill().bfill().fillna(0.0)
+        recent[feature] = pd.to_numeric(recent[feature], errors="coerce").ffill().fillna(0.0)
 
     step_seconds = _infer_step_seconds(recent)
     total_seconds = max(int(future_minutes) * 60, step_seconds * 6)
     steps = max(6, int(np.ceil(total_seconds / step_seconds)))
     last_ts = recent["timestamp"].iloc[-1]
+    
+    future_timestamps = [last_ts + pd.Timedelta(seconds=step_seconds * i) for i in range(1, steps + 1)]
+    future = pd.DataFrame({"timestamp": future_timestamps})
 
-    # ------------------------------------------------------------------
-    # Recursive AI Forecasting with Auto-Regressive Lag Features
-    # ------------------------------------------------------------------
-    sensor_forecaster, sensor_columns, input_features, num_lags = _load_sensor_forecaster()
-    n_sensors = len(sensor_columns)
+    try:
+        forecaster_data = _load_sensor_forecaster()
+        if forecaster_data:
+            forecaster = forecaster_data[0] if isinstance(forecaster_data, tuple) else forecaster_data["model"]
+            raw_sensors = forecaster_data[1] if isinstance(forecaster_data, tuple) else forecaster_data["sensor_columns"]
+            input_features = forecaster_data[2] if isinstance(forecaster_data, tuple) else forecaster_data["input_features"]
+            num_lags = forecaster_data[3] if isinstance(forecaster_data, tuple) else forecaster_data["num_lags"]
+            
+            history_needed = num_lags + 1
+            if len(recent) < history_needed:
+                pad_df = pd.DataFrame([recent.iloc[0]] * (history_needed - len(recent)))
+                history_df = pd.concat([pad_df, recent], ignore_index=True)
+            else:
+                history_df = recent.tail(history_needed).copy()
+                
+            state_buffer = history_df[raw_sensors].to_dict('records')
+            future_raw_predictions = []
+            
+            for _ in range(steps):
+                current_input = {}
+                for s in raw_sensors:
+                    current_input[s] = state_buffer[-1].get(s, 0.0)
+                for lag in range(1, num_lags + 1):
+                    lag_idx = -(lag + 1)
+                    for s in raw_sensors:
+                        current_input[f"{s}_lag_{lag}"] = state_buffer[lag_idx].get(s, 0.0)
+                        
+                X_step = [[current_input.get(f, 0.0) for f in input_features]]
+                pred_raw = forecaster.predict(X_step)[0]
+                
+                next_state = {}
+                for i, sensor in enumerate(raw_sensors):
+                    ai_val = pred_raw[i]
+                    current_val = state_buffer[-1].get(sensor, ai_val)
+                    
+                    recent_3 = [state_buffer[-j].get(sensor, current_val) for j in range(1, min(4, len(state_buffer)+1))]
+                    trend_avg = sum(recent_3) / len(recent_3)
+                    
+                    smoothed_val = (0.85 * trend_avg) + (0.15 * ai_val)
+                    
+                    max_delta = max(abs(trend_avg) * 0.002, 0.005)
+                    raw_delta = smoothed_val - current_val
+                    clamped_delta = max(-max_delta, min(max_delta, raw_delta))
+                    
+                    final_val = current_val + clamped_delta
+                    
+                    if sensor in SAFE_LIMITS:
+                        if "min" in SAFE_LIMITS[sensor]:
+                            final_val = max(final_val, _safe_float(SAFE_LIMITS[sensor]["min"]) or final_val)
+                        if "max" in SAFE_LIMITS[sensor]:
+                            final_val = min(final_val, _safe_float(SAFE_LIMITS[sensor]["max"]) or final_val)
+                            
+                    next_state[sensor] = final_val
+                    
+                future_raw_predictions.append(next_state)
+                state_buffer.pop(0)
+                state_buffer.append(next_state)
+                
+            pred_df = pd.DataFrame(future_raw_predictions)
+            for col in raw_sensors:
+                future[col] = pred_df[col]
+        else:
+            raise ValueError("Lagged forecaster model missing.")
+            
+    except Exception as e:
+        print(f"Warning: Lagged forecaster bypassed ({e}). Falling back to flatline.")
+        for col in SAFE_LIMITS.keys():
+            if col in recent.columns:
+                future[col] = recent.iloc[-1][col]
 
-    # Build initial state buffer from the last (num_lags + 1) rows of history.
-    # Layout: lag_buffer[0] = current values, lag_buffer[1] = t-1, ..., lag_buffer[num_lags] = t-num_lags
-    seed_rows = recent.tail(num_lags + 1)
-    lag_buffer = np.zeros((num_lags + 1, n_sensors), dtype=np.float64)
-
-    for row_idx, (_, row) in enumerate(seed_rows.iloc[::-1].iterrows()):
-        if row_idx > num_lags:
-            break
-        for col_idx, sensor in enumerate(sensor_columns):
-            lag_buffer[row_idx, col_idx] = float(row.get(sensor, 0.0) or 0.0)
-
-    # Pre-compute clamp bounds as float arrays (NaN = no limit)
-    clamp_lo = np.full(n_sensors, -np.inf, dtype=np.float64)
-    clamp_hi = np.full(n_sensors, np.inf, dtype=np.float64)
-    for j, s in enumerate(sensor_columns):
-        lim = SAFE_LIMITS.get(s, {})
-        lo = _safe_float(lim.get("min"))
-        hi = _safe_float(lim.get("max"))
-        if lo is not None:
-            clamp_lo[j] = lo
-        if hi is not None:
-            clamp_hi[j] = hi
-
-    future_rows = []
-    for _ in range(steps):
-        # Assemble the input vector: [current_sensors, lag_1, lag_2, ..., lag_N]
-        input_vec = lag_buffer.ravel()  # shape (n_sensors * (num_lags + 1),)
-
-        # Predict the next time-step
-        predicted = sensor_forecaster.predict(input_vec.reshape(1, -1))[0]
-
-        # Clamp to safe physical limits
-        predicted = np.clip(predicted, clamp_lo, clamp_hi)
-
-        future_rows.append(predicted.copy())
-
-        # Shift the lag buffer: move everything down by one slot, insert prediction at [0]
-        lag_buffer[1:] = lag_buffer[:-1]
-        lag_buffer[0] = predicted
-
-    # Build future DataFrame with AI-predicted raw sensors
-    future = pd.DataFrame(future_rows, columns=sensor_columns)
-    future.insert(
-        0,
-        "timestamp",
-        [last_ts + pd.Timedelta(seconds=step_seconds * i) for i in range(1, steps + 1)],
-    )
-
-    # ------------------------------------------------------------------
-    # Forward-fill complex rolling features (300+ columns) from last state
-    # Computing rolling windows recursively would be too expensive for API.
-    # ------------------------------------------------------------------
-    last_known = recent.iloc[-1]
+    last_known_features = recent.iloc[-1]
     for feature in model_features:
         if feature not in future.columns:
-            val = float(last_known.get(feature, 0.0) or 0.0)
-            future[feature] = val
+            future[feature] = last_known_features.get(feature, 0.0)
 
-    # ------------------------------------------------------------------
-    # Score: run the scrap risk model on the AI-forecasted future data
-    # ------------------------------------------------------------------
-    safe_features = [
-        f for f in model_features
-        if f in future.columns
-        and f not in ["timestamp", "machine_id", "machine_id_normalized", "event_timestamp", "is_scrap"]
-    ]
-
+    safe_features = [f for f in model_features if f in future.columns and f not in ["timestamp", "machine_id", "machine_id_normalized", "event_timestamp", "is_scrap"]]
     X_future = future[safe_features].fillna(0.0)
-
-    if hasattr(scrap_model, "predict_proba"):
-        risk_values = scrap_model.predict_proba(X_future)[:, 1]
+    
+    if hasattr(model, "predict_proba"):
+        risk_values = model.predict_proba(X_future)[:, 1]
     else:
-        risk_values = scrap_model.predict(X_future)
+        risk_values = model.predict(X_future)
 
     future["scrap_probability"] = pd.Series(risk_values).clip(0, 1)
     future["is_scrap_actual"] = 0
     future["predicted_scrap"] = (future["scrap_probability"] >= FUTURE_RISK_THRESHOLD).astype(int)
+    
     return future
 
 

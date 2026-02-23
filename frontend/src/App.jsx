@@ -211,28 +211,40 @@ function SystemHealthMonitor({ timeline, riskScore }) {
 function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
   const chartData = useMemo(() => {
     if (!timeline || !timeline.length) return [];
-    
     let lastPastIndex = -1;
-    timeline.forEach((point, index) => {
-      if (!point.is_future) lastPastIndex = index;
-    });
+    timeline.forEach((point, index) => { if (!point.is_future) lastPastIndex = index; });
 
     return timeline.map((point, index) => {
       const val = toNumber(point.sensors?.[sensor]);
       const isTransition = index === lastPastIndex;
-      
       return {
         timestamp: point.timestamp,
         pastValue: (!point.is_future || isTransition) ? val : null,
         futureValue: (point.is_future || isTransition) ? val : null,
+        rawValue: val
       };
-    }).filter((point) => point.pastValue !== null || point.futureValue !== null); 
-    // ^ The filter is back, but it won't break the graph because the backend is now sending real future data!
+    }).filter((point) => point.pastValue !== null || point.futureValue !== null);
   }, [timeline, sensor]);
 
   const limits = safeLimits?.[sensor] || {};
   const minLimit = toNumber(limits.min);
   const maxLimit = toNumber(limits.max);
+
+  const yDomain = useMemo(() => {
+    const values = chartData.map(d => d.rawValue).filter(v => v !== null);
+    if (values.length === 0) return ['auto', 'auto'];
+
+    const dataMin = Math.min(...values);
+    const dataMax = Math.max(...values);
+
+    const finalMin = minLimit !== null ? Math.min(dataMin, minLimit) : dataMin;
+    const finalMax = maxLimit !== null ? Math.max(dataMax, maxLimit) : dataMax;
+
+    const padding = (finalMax - finalMin) * 0.05;
+    if (padding === 0) return [finalMin - 1, finalMax + 1];
+
+    return [finalMin - padding, finalMax + padding];
+  }, [chartData, minLimit, maxLimit]);
 
   return (
     <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
@@ -245,15 +257,17 @@ function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
           <LineChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
             <XAxis dataKey="timestamp" tickFormatter={formatClock} tick={{ fill: "#94a3b8", fontSize: 11 }} />
-            <YAxis domain={['auto', 'auto']} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+
+            <YAxis domain={yDomain} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+
             <Tooltip
               contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155", color: "#e2e8f0" }}
               formatter={(value) => (toNumber(value) ?? 0).toFixed(3)}
               labelFormatter={(value) => value}
             />
-            {minLimit !== null && <ReferenceLine y={minLimit} stroke="#f97316" strokeDasharray="4 4" />}
-            {maxLimit !== null && <ReferenceLine y={maxLimit} stroke="#ef4444" strokeDasharray="4 4" />}
-            
+            {minLimit !== null && <ReferenceLine y={minLimit} stroke="#f97316" strokeDasharray="4 4" label={{ value: "MIN", fill: "#f97316", fontSize: 10 }} />}
+            {maxLimit !== null && <ReferenceLine y={maxLimit} stroke="#ef4444" strokeDasharray="4 4" label={{ value: "MAX", fill: "#ef4444", fontSize: 10 }} />}
+
             <Line type="monotone" dataKey="pastValue" stroke="#60a5fa" strokeWidth={2.4} dot={false} connectNulls={true} />
             <Line type="monotone" dataKey="futureValue" stroke="#f59e0b" strokeWidth={2.4} strokeDasharray="7 5" dot={false} connectNulls={true} />
           </LineChart>
@@ -263,104 +277,171 @@ function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
   );
 }
 
-function TelemetryPanel({ latestSensors, effectiveLimits, breaches, onLimitOverride }) {
-  const breachMap = useMemo(
-    () =>
-      (breaches || []).reduce((acc, entry) => {
-        acc[entry.sensor] = entry;
-        return acc;
-      }, {}),
-    [breaches],
-  );
+function TelemetryPanel({ timeline, latestSensors, safeLimits }) {
+  const tableData = useMemo(() => {
+    if (!latestSensors || !safeLimits) return [];
 
-  const cards = Object.entries(latestSensors || {}).sort((a, b) => a[0].localeCompare(b[0]));
+    const futurePoints = timeline?.filter(p => p.is_future) || [];
+    const lastFuturePoint = futurePoints[futurePoints.length - 1] || {};
+
+    return Object.keys(safeLimits).map(sensor => {
+      const current = toNumber(latestSensors[sensor]);
+      const min = toNumber(safeLimits[sensor]?.min);
+      const max = toNumber(safeLimits[sensor]?.max);
+      const forecast = toNumber(lastFuturePoint.sensors?.[sensor]);
+
+      let status = "good";
+      let statusText = "Normal";
+
+      if (current !== null) {
+        let span = 100;
+        if (min !== null && max !== null) span = max - min;
+        else if (max !== null) span = max;
+        else if (min !== null) span = min;
+
+        if ((min !== null && current < min) || (max !== null && current > max)) {
+          status = "critical";
+          statusText = "Exceeded";
+        } else if (
+          (min !== null && current - min < span * 0.1) ||
+          (max !== null && max - current < span * 0.1)
+        ) {
+          status = "warning";
+          statusText = "Warning";
+        }
+      }
+
+      return {
+        sensor: sensor.replace(/_/g, " "),
+        current,
+        min,
+        max,
+        forecast,
+        status,
+        statusText
+      };
+    }).sort((a, b) => {
+      const weights = { critical: 3, warning: 2, good: 1 };
+      return weights[b.status] - weights[a.status];
+    });
+  }, [timeline, latestSensors, safeLimits]);
 
   return (
-    <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-200">
-        <Gauge size={16} className="text-violet-300" />
-        Section C: Telemetry Panel
+    <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4 flex flex-col h-full">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-200 shrink-0">
+        <Activity size={16} className="text-emerald-400" />
+        Section C: Real-Time Telemetry Grid
       </h2>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {cards.map(([sensor, rawValue]) => {
-          const current = toNumber(rawValue);
-          const limits = effectiveLimits?.[sensor] || {};
-          const minValue = limits.min ?? "";
-          const maxValue = limits.max ?? "";
-          const breach = breachMap[sensor];
-          const warningClass = breach
-            ? "border-red-500 bg-red-950/60 shadow-[0_0_0_1px_rgba(239,68,68,0.3)] animate-pulse"
-            : "border-slate-700 bg-slate-950/60";
 
-          return (
-            <article key={sensor} className={`rounded-lg border p-3 ${warningClass}`}>
-              <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-200">{sensor}</h3>
-                {breach && <span className="text-[10px] font-semibold text-red-300">BREACH</span>}
-              </div>
-              <p className="font-mono text-lg text-slate-100">{current !== null ? current.toFixed(3) : "N/A"}</p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <label className="text-[11px] text-slate-400">
-                  Min
-                  <input
-                    type="number"
-                    value={minValue}
-                    onChange={(event) => onLimitOverride(sensor, "min", event.target.value)}
-                    className="mt-1 w-full rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 outline-none"
-                  />
-                </label>
-                <label className="text-[11px] text-slate-400">
-                  Max
-                  <input
-                    type="number"
-                    value={maxValue}
-                    onChange={(event) => onLimitOverride(sensor, "max", event.target.value)}
-                    className="mt-1 w-full rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-200 outline-none"
-                  />
-                </label>
-              </div>
-            </article>
-          );
-        })}
+      <div className="flex-1 overflow-auto rounded-lg border border-slate-700/50 bg-slate-900 shadow-inner">
+        <table className="w-full text-left text-sm whitespace-nowrap">
+          <thead className="sticky top-0 bg-slate-800 text-xs uppercase text-slate-400 z-10 shadow-md">
+            <tr>
+              <th className="px-4 py-3 font-medium">Parameter</th>
+              <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium">Current</th>
+              <th className="px-4 py-3 font-medium">Safe Range</th>
+              <th className="px-4 py-3 font-medium">Forecast (End)</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-700/50">
+            {tableData.map((row, idx) => (
+              <tr key={idx} className="hover:bg-slate-800/50 transition-colors">
+                <td className="px-4 py-3 font-medium text-slate-300 capitalize">{row.sensor.toLowerCase()}</td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`h-2.5 w-2.5 rounded-full ${row.status === 'critical' ? 'bg-red-500 animate-pulse' :
+                      row.status === 'warning' ? 'bg-amber-400' : 'bg-emerald-500'
+                      }`}></span>
+                    <span className={`text-xs font-semibold ${row.status === 'critical' ? 'text-red-400' :
+                      row.status === 'warning' ? 'text-amber-300' : 'text-emerald-400'
+                      }`}>{row.statusText}</span>
+                  </div>
+                </td>
+                <td className="px-4 py-3 font-mono text-slate-200">
+                  {row.current !== null ? row.current.toFixed(2) : "--"}
+                </td>
+                <td className="px-4 py-3 text-xs text-slate-400">
+                  {row.min !== null ? row.min : "0"} <span className="text-slate-600 px-1">~</span> {row.max !== null ? row.max : "∞"}
+                </td>
+                <td className="px-4 py-3 font-mono text-amber-400/90">
+                  {row.forecast !== null ? row.forecast.toFixed(2) : "--"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </section>
   );
 }
 
-function PredictionSummary({ machineInfo, summaryStats, health, activeSensor }) {
+function PredictionSummary({ summaryStats, timeline }) {
+  const stats = useMemo(() => {
+    const pastPoints = timeline?.filter(p => !p.is_future) || [];
+    const futurePoints = timeline?.filter(p => p.is_future) || [];
+
+    const avgPastRisk = pastPoints.length ? (pastPoints.reduce((acc, p) => acc + p.risk_score, 0) / pastPoints.length) * 100 : 0;
+    const avgFutureRisk = futurePoints.length ? (futurePoints.reduce((acc, p) => acc + p.risk_score, 0) / futurePoints.length) * 100 : 0;
+
+    const pastScrapCount = summaryStats?.past_scrap_detected || 0;
+    const futureScrapCount = summaryStats?.future_scrap_predicted || 0;
+
+    const riskTrend = avgFutureRisk - avgPastRisk;
+
+    return {
+      pastScrapCount,
+      futureScrapCount,
+      avgPastRisk,
+      riskTrend,
+      trendText: riskTrend > 0 ? `Upward +${riskTrend.toFixed(1)}%` : riskTrend < 0 ? `Downward ${riskTrend.toFixed(1)}%` : "Stable 0.0%",
+      trendColor: riskTrend > 0 ? "text-red-400" : riskTrend < 0 ? "text-emerald-400" : "text-slate-400",
+      trendBorder: riskTrend > 0 ? "border-red-900/50 bg-red-900/10" : "border-slate-700/50 bg-slate-800/50"
+    };
+  }, [summaryStats, timeline]);
+
   return (
-    <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-200">
-        <Settings2 size={16} className="text-sky-300" />
-        Section D: Prediction Summary
-      </h2>
-      <div className="space-y-2 text-sm">
-        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
-          <span className="text-slate-400">Machine:</span> {machineInfo?.id}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Past Scrap Analysis Card */}
+      <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-sm font-semibold text-slate-200">Past Scrap Analysis</h3>
+          <span className="px-2 py-1 text-[10px] uppercase font-bold tracking-wider text-emerald-400 bg-emerald-400/10 rounded">Actual</span>
         </div>
-        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
-          <span className="text-slate-400">Tool ID:</span> {machineInfo?.tool_id}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="p-4 rounded-lg border border-slate-700/50 bg-slate-800/50">
+            <p className="text-xs text-slate-400 mb-1 font-medium">Total Past Scrap</p>
+            <p className="text-2xl font-bold text-slate-100">{stats.pastScrapCount} <span className="text-sm font-normal text-slate-500">units</span></p>
+            <p className="text-xs text-slate-500 mt-1">Last 4 hours</p>
+          </div>
+          <div className="p-4 rounded-lg border border-cyan-900/50 bg-cyan-900/10">
+            <p className="text-xs text-cyan-400/70 mb-1 font-medium">Average Past Risk</p>
+            <p className="text-2xl font-bold text-cyan-400">{stats.avgPastRisk.toFixed(1)}%</p>
+            <p className="text-xs text-cyan-500/50 mt-1">Historical baseline</p>
+          </div>
         </div>
-        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
-          <span className="text-slate-400">Part Number:</span> {machineInfo?.part_number}
+      </section>
+
+      {/* Future Scrap Forecast Card */}
+      <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-sm font-semibold text-slate-200">Future Scrap Forecast</h3>
+          <span className="px-2 py-1 text-[10px] uppercase font-bold tracking-wider text-amber-400 bg-amber-400/10 rounded">Predicted</span>
         </div>
-        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
-          <span className="text-slate-400">Past Scrap Detected:</span> {summaryStats?.past_scrap_detected ?? 0}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="p-4 rounded-lg border border-amber-900/50 bg-amber-900/10">
+            <p className="text-xs text-amber-400/70 mb-1 font-medium">Predicted Scrap</p>
+            <p className="text-2xl font-bold text-amber-400">{stats.futureScrapCount} <span className="text-sm font-normal text-amber-700/50">units</span></p>
+            <p className="text-xs text-amber-500/50 mt-1">Next 60 min</p>
+          </div>
+          <div className={`p-4 rounded-lg border ${stats.trendBorder}`}>
+            <p className="text-xs text-slate-400 mb-1 font-medium">Trend Comparison</p>
+            <p className={`text-2xl font-bold ${stats.trendColor}`}>{stats.trendText}</p>
+            <p className="text-xs text-slate-500 mt-1">Future vs Past</p>
+          </div>
         </div>
-        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
-          <span className="text-slate-400">Future Scrap Predicted:</span> {summaryStats?.future_scrap_predicted ?? 0}
-        </div>
-        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
-          <span className="text-slate-400">Health Status:</span> {health?.status}
-        </div>
-        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
-          <span className="text-slate-400">Health Risk Score:</span> {((health?.risk_score ?? 0) * 100).toFixed(1)}%
-        </div>
-        <div className="rounded-md border border-slate-700 bg-slate-950/60 p-2 text-slate-200">
-          <span className="text-slate-400">Active Root Cause:</span> {activeSensor}
-        </div>
-      </div>
-    </section>
+      </section>
+    </div>
   );
 }
 
@@ -480,28 +561,6 @@ function App() {
 
   const activeSensor = activeRootCauses[0] || "Injection_pressure";
 
-  const handleLimitOverride = useCallback((sensor, bound, rawValue) => {
-    setLimitOverrides((previous) => {
-      const next = { ...previous };
-      const parsed = rawValue === "" ? null : Number(rawValue);
-      const validValue = parsed !== null && Number.isFinite(parsed) ? parsed : null;
-
-      const sensorOverrides = { ...(next[sensor] || {}) };
-      if (validValue === null) {
-        delete sensorOverrides[bound];
-      } else {
-        sensorOverrides[bound] = validValue;
-      }
-
-      if (Object.keys(sensorOverrides).length === 0) {
-        delete next[sensor];
-      } else {
-        next[sensor] = sensorOverrides;
-      }
-      return next;
-    });
-  }, []);
-
   if (loading && !controlRoomData) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
@@ -523,29 +582,27 @@ function App() {
 
         {error && <div className="rounded-md border border-red-700 bg-red-950/50 px-4 py-2 text-sm text-red-200">{error}</div>}
 
+        {/* MAIN DASHBOARD GRID */}
         <div className="grid grid-cols-12 gap-4">
+
+          {/* Section A: Full Width Top */}
           <div className="col-span-12">
             <SystemHealthMonitor timeline={displayTimeline} riskScore={currentHealth.risk_score} />
           </div>
 
-          <div className="col-span-12 xl:col-span-8">
+          {/* Section B & C: Side-by-Side row */}
+          <div className="col-span-12 lg:col-span-8 flex flex-col">
             <RootCauseAnalyzer timeline={displayTimeline} sensor={activeSensor} safeLimits={effectiveLimits} />
           </div>
-
-          <div className="col-span-12 grid gap-4 xl:col-span-4">
-            <TelemetryPanel
-              latestSensors={latestSensors}
-              effectiveLimits={effectiveLimits}
-              breaches={breaches}
-              onLimitOverride={handleLimitOverride}
-            />
-            <PredictionSummary
-              machineInfo={controlRoomData?.machine_info}
-              summaryStats={summaryStats}
-              health={currentHealth}
-              activeSensor={activeSensor}
-            />
+          <div className="col-span-12 lg:col-span-4 flex flex-col h-full">
+            <TelemetryPanel timeline={displayTimeline} latestSensors={latestSensors} safeLimits={effectiveLimits} />
           </div>
+
+          {/* Section D: Full Width Bottom */}
+          <div className="col-span-12 mt-2">
+            <PredictionSummary summaryStats={summaryStats} timeline={displayTimeline} />
+          </div>
+
         </div>
       </div>
     </main>
