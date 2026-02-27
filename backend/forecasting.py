@@ -43,6 +43,21 @@ def generate_forecast(history_df, parameter_name, future_minutes=60):
         "type": "prediction" # This flag tells React to make the line DOTTED
     })
     
+    # --- IDLE MACHINE FILTER FOR SECTION B ---
+    # If the machine is currently offline (recent cycle time near 0),
+    # the parameter (e.g., Peak_pressure_time) should drop to 0 rather than float indefinitely.
+    cycle_col = "Cycle_time"
+    if "Cycle_time" not in history_df.columns and "Cycle_time__last_5m" in history_df.columns:
+        cycle_col = "Cycle_time__last_5m"
+        
+    if cycle_col in history_df.columns:
+        # Use history_df because df only has event_timestamp and parameter_name
+        recent_cycle_data = history_df[cycle_col].tail(5)
+        # If all 5 recent cycles are NaN, or the mean is < 0.5, we are offline
+        if recent_cycle_data.isna().all() or (pd.notna(recent_cycle_data.mean()) and recent_cycle_data.mean() < 0.5):
+            # Force future predicted values to be exactly 0
+            future_df["value"] = 0.0
+    
     # Combine
     full_df = pd.concat([df.drop(columns=["time_sec"]), future_df])
     return full_df

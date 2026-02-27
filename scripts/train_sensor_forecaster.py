@@ -4,11 +4,11 @@ Train Recursive Sensor Forecaster with Auto-Regressive Lag Features
 Trains a MultiOutputRegressor(LGBMRegressor) that predicts the NEXT
 time-step values for every raw sensor defined in SAFE_LIMITS.
 
-Each raw sensor gets 5 lag features (t-1 through t-5) so the model
-understands recent momentum and avoids sudden unphysical drops.
+TE AI TEAM DOCTRINE (Updated):
+- MULTIVARIATE INTERACTION: This model doesn't just predict Sensor A from past Sensor A. Every target is predicted using the lags of ALL 14 sensors simultaneously. Thus, the model learns the cross-sensor linkages inherently (e.g. Cycle Time directly impacts future Peak Pressure and Dosage Time).
+- HYDRA DATA INTEGRATION: The model can conditionally use non-sensor "Hydra Data" (like `Machine_status` or state categorizations) as an explicit contextual feature, enabling the model to learn when the machine is idle vs. running.
 
-Input features (X)  = [sensor_current, sensor_lag_1, ..., sensor_lag_5]
-                       for all 14 raw sensors  →  14 * 6 = 84 features
+Input features (X)  = [Hydra Data] + [sensor_current_vals] + [sensor_lags (t-1:5)]
 Target (y)          = shift(-1) of raw sensors  →  14 targets
 
 Usage:
@@ -87,10 +87,18 @@ def main():
             sensor_df[col_name] = sensor_df[sensor].shift(lag)
             lag_columns.append(col_name)
 
-    # Input features = current raw sensors + all lag columns
-    input_features = raw_sensors + lag_columns
+    # 5b. Incorporate Hydra Data (Machine status/context)
+    hydra_features = []
+    if "Machine_status" in df.columns:
+        # Assuming Machine_status is a numeric categorical or boolean
+        sensor_df["Machine_status"] = pd.to_numeric(df["Machine_status"], errors="coerce").fillna(0)
+        hydra_features.append("Machine_status")
+        print(f"[INFO] Integrated Hydra Data Feature: 'Machine_status'")
+
+    # Input features = Hydra data + current raw sensors + all lag columns
+    input_features = hydra_features + raw_sensors + lag_columns
     print(f"[INFO] Total input features: {len(input_features)}  "
-          f"({len(raw_sensors)} current + {len(lag_columns)} lags)")
+          f"({len(hydra_features)} Hydra + {len(raw_sensors)} current + {len(lag_columns)} lags)")
 
     # 6. Create target: shift each raw sensor by -1 (predict next time step)
     target_df = sensor_df[raw_sensors].shift(-1)
@@ -130,6 +138,7 @@ def main():
         "model": model,
         "sensor_columns": raw_sensors,
         "input_features": input_features,
+        "hydra_features": hydra_features,
         "num_lags": NUM_LAGS,
     }
     joblib.dump(artifact, MODEL_OUT)

@@ -2,15 +2,17 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
   CartesianGrid,
+  Legend,
   Line,
   LineChart,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
-import { Activity, AlertTriangle, Gauge, Settings2 } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Gauge, Settings2 } from "lucide-react";
 
 const API_BASE = "http://127.0.0.1:8080";
 const FUTURE_RISK_THRESHOLD = 0.6;
@@ -23,10 +25,8 @@ const MACHINE_OPTIONS = [
 ];
 
 const TIME_WINDOW_OPTIONS = [
-  { value: 60, label: "Past 1h + Future 15m" },
-  { value: 120, label: "Past 2h + Future 30m" },
-  { value: 240, label: "Past 4h + Future 1h" },
-  { value: 360, label: "Past 6h + Future 1h30m" },
+  { value: 120, futureMinutes: 35, label: "2H Past / 35M Future" },
+  { value: 60, futureMinutes: 20, label: "1H Past / 20M Future" },
 ];
 
 const toNumber = (value) => {
@@ -163,13 +163,7 @@ function SystemHealthMonitor({ timeline, riskScore }) {
     return <div className="flex h-64 items-center justify-center text-sm text-slate-400">No timeline data available.</div>;
   }
 
-  const renderAlertDot = (props) => {
-    const { cx, cy, payload } = props;
-    if (!payload?.alertDot) {
-      return null;
-    }
-    return <circle cx={cx} cy={cy} r={4} fill="#ef4444" stroke="#fee2e2" strokeWidth={1} />;
-  };
+
 
   return (
     <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
@@ -184,21 +178,23 @@ function SystemHealthMonitor({ timeline, riskScore }) {
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis dataKey="timestamp" tickFormatter={formatClock} tick={{ fill: "#94a3b8", fontSize: 11 }} />
-            <YAxis domain={[0, 1]} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+            <XAxis dataKey="timestamp" tickFormatter={formatClock} tick={{ fill: "#94a3b8", fontSize: 11 }} label={{ value: 'Time', position: 'insideBottomRight', offset: -5, fill: '#94a3b8', fontSize: 12 }} />
+            <YAxis domain={[0, 1]} tick={{ fill: "#94a3b8", fontSize: 11 }} label={{ value: 'Risk Probability', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 12 }} />
             <Tooltip
               contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155", color: "#e2e8f0" }}
               formatter={(value) => (toNumber(value) ?? 0).toFixed(3)}
               labelFormatter={(value) => value}
             />
-            <Line type="monotone" dataKey="pastRisk" stroke="#22d3ee" strokeWidth={2.4} dot={renderAlertDot} />
+            <Legend verticalAlign="top" height={36} iconType="line" />
+            <Line type="monotone" dataKey="pastRisk" name="Past (Actual)" stroke="#22d3ee" strokeWidth={2.4} dot={false} />
             <Line
               type="monotone"
               dataKey="futureRisk"
+              name="Future (Predicted)"
               stroke="#f59e0b"
               strokeWidth={2.2}
               strokeDasharray="7 5"
-              dot={renderAlertDot}
+              dot={false}
             />
             <ReferenceLine y={FUTURE_RISK_THRESHOLD} stroke="#ef4444" strokeDasharray="5 5" />
           </LineChart>
@@ -210,7 +206,7 @@ function SystemHealthMonitor({ timeline, riskScore }) {
 
 function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
   const chartData = useMemo(() => {
-    if (!timeline || !timeline.length) return [];
+    if (!sensor || !timeline || !timeline.length) return [];
     let lastPastIndex = -1;
     timeline.forEach((point, index) => { if (!point.is_future) lastPastIndex = index; });
 
@@ -246,30 +242,55 @@ function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
     return [finalMin - padding, finalMax + padding];
   }, [chartData, minLimit, maxLimit]);
 
+  // All-systems-normal fallback when no sensor is selected
+  if (!sensor) {
+    return (
+      <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-200">
+          <AlertTriangle size={16} className="text-amber-300" />
+          Section B: Root Cause Analyzer
+        </h2>
+        <div className="flex h-72 flex-col items-center justify-center gap-3">
+          <CheckCircle2 size={48} className="text-emerald-400" />
+          <p className="text-lg font-semibold text-emerald-300">All Systems Normal</p>
+          <p className="text-sm text-slate-400">No Root Cause to Display — click a Warning or Exceeded parameter in the telemetry grid</p>
+        </div>
+      </section>
+    );
+  }
+
+  const displaySensorName = sensor.replace(/_/g, " ");
+
   return (
     <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
       <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-200">
         <AlertTriangle size={16} className="text-amber-300" />
-        Section B: Root Cause Analyzer ({sensor})
+        Section B: Root Cause Analyzer ({displaySensorName})
       </h2>
       <div className="h-72">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis dataKey="timestamp" tickFormatter={formatClock} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+            <XAxis dataKey="timestamp" tickFormatter={formatClock} tick={{ fill: "#94a3b8", fontSize: 11 }} label={{ value: 'Time', position: 'insideBottomRight', offset: -5, fill: '#94a3b8', fontSize: 12 }} />
 
-            <YAxis domain={yDomain} tick={{ fill: "#94a3b8", fontSize: 11 }} />
+            <YAxis domain={yDomain} tick={{ fill: "#94a3b8", fontSize: 11 }} label={{ value: 'Sensor Value', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 12 }} />
 
             <Tooltip
               contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155", color: "#e2e8f0" }}
               formatter={(value) => (toNumber(value) ?? 0).toFixed(3)}
               labelFormatter={(value) => value}
             />
-            {minLimit !== null && <ReferenceLine y={minLimit} stroke="#f97316" strokeDasharray="4 4" label={{ value: "MIN", fill: "#f97316", fontSize: 10 }} />}
-            {maxLimit !== null && <ReferenceLine y={maxLimit} stroke="#ef4444" strokeDasharray="4 4" label={{ value: "MAX", fill: "#ef4444", fontSize: 10 }} />}
+            <Legend verticalAlign="top" height={36} iconType="line" />
+            <ReferenceArea
+              y1={minLimit !== null ? minLimit : undefined}
+              y2={maxLimit !== null ? maxLimit : undefined}
+              fillOpacity={0.1}
+              fill="#10b981"
+              label={{ value: 'Safe Zone', fill: '#10b981', fontSize: 10, position: 'insideTopRight' }}
+            />
 
-            <Line type="monotone" dataKey="pastValue" stroke="#60a5fa" strokeWidth={2.4} dot={false} connectNulls={true} />
-            <Line type="monotone" dataKey="futureValue" stroke="#f59e0b" strokeWidth={2.4} strokeDasharray="7 5" dot={false} connectNulls={true} />
+            <Line type="monotone" dataKey="pastValue" name="Past (Actual)" stroke="#60a5fa" strokeWidth={2.4} dot={false} connectNulls={true} />
+            <Line type="monotone" dataKey="futureValue" name="Future (Predicted)" stroke="#f59e0b" strokeWidth={2.4} strokeDasharray="7 5" dot={false} connectNulls={true} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -277,12 +298,16 @@ function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
   );
 }
 
-function TelemetryPanel({ timeline, latestSensors, safeLimits }) {
+function TelemetryPanel({ timeline, latestSensors, safeLimits, selectedSensor, onSelectSensor, currentTimeWindow }) {
+  const futurePoints = timeline?.filter(p => p.is_future) || [];
+  const lastFuturePoint = futurePoints[futurePoints.length - 1] || {};
+  let formattedFutureTime = `+${currentTimeWindow?.futureMinutes || 35} mins`;
+  if (lastFuturePoint.timestamp) {
+    formattedFutureTime = `at ${lastFuturePoint.timestamp.slice(11, 16)}`;
+  }
+
   const tableData = useMemo(() => {
     if (!latestSensors || !safeLimits) return [];
-
-    const futurePoints = timeline?.filter(p => p.is_future) || [];
-    const lastFuturePoint = futurePoints[futurePoints.length - 1] || {};
 
     return Object.keys(safeLimits).map(sensor => {
       const current = toNumber(latestSensors[sensor]);
@@ -312,6 +337,7 @@ function TelemetryPanel({ timeline, latestSensors, safeLimits }) {
       }
 
       return {
+        sensorKey: sensor,
         sensor: sensor.replace(/_/g, " "),
         current,
         min,
@@ -324,7 +350,7 @@ function TelemetryPanel({ timeline, latestSensors, safeLimits }) {
       const weights = { critical: 3, warning: 2, good: 1 };
       return weights[b.status] - weights[a.status];
     });
-  }, [timeline, latestSensors, safeLimits]);
+  }, [timeline, latestSensors, safeLimits, lastFuturePoint]);
 
   return (
     <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4 flex flex-col h-full">
@@ -341,34 +367,58 @@ function TelemetryPanel({ timeline, latestSensors, safeLimits }) {
               <th className="px-4 py-3 font-medium">Status</th>
               <th className="px-4 py-3 font-medium">Current</th>
               <th className="px-4 py-3 font-medium">Safe Range</th>
-              <th className="px-4 py-3 font-medium">Forecast (End)</th>
+              <th className="px-4 py-3 font-medium">
+                Prediction
+                <span className="block text-[10px] text-slate-500 font-normal normal-case mt-0.5 tracking-normal">
+                  ({formattedFutureTime})
+                </span>
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/50">
-            {tableData.map((row, idx) => (
-              <tr key={idx} className="hover:bg-slate-800/50 transition-colors">
-                <td className="px-4 py-3 font-medium text-slate-300 capitalize">{row.sensor.toLowerCase()}</td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <span className={`h-2.5 w-2.5 rounded-full ${row.status === 'critical' ? 'bg-red-500 animate-pulse' :
-                      row.status === 'warning' ? 'bg-amber-400' : 'bg-emerald-500'
-                      }`}></span>
-                    <span className={`text-xs font-semibold ${row.status === 'critical' ? 'text-red-400' :
-                      row.status === 'warning' ? 'text-amber-300' : 'text-emerald-400'
-                      }`}>{row.statusText}</span>
-                  </div>
-                </td>
-                <td className="px-4 py-3 font-mono text-slate-200">
-                  {row.current !== null ? row.current.toFixed(2) : "--"}
-                </td>
-                <td className="px-4 py-3 text-xs text-slate-400">
-                  {row.min !== null ? row.min : "0"} <span className="text-slate-600 px-1">~</span> {row.max !== null ? row.max : "∞"}
-                </td>
-                <td className="px-4 py-3 font-mono text-amber-400/90">
-                  {row.forecast !== null ? row.forecast.toFixed(2) : "--"}
-                </td>
-              </tr>
-            ))}
+            {tableData.map((row, idx) => {
+              const isClickable = row.status === "critical" || row.status === "warning";
+              const isSelected = selectedSensor === row.sensorKey;
+
+              const rowClassName = [
+                "transition-colors",
+                isSelected
+                  ? "bg-cyan-900/25 border-l-2 border-l-cyan-400"
+                  : "",
+                isClickable
+                  ? "cursor-pointer hover:bg-slate-800/60"
+                  : "cursor-default",
+              ].filter(Boolean).join(" ");
+
+              return (
+                <tr
+                  key={idx}
+                  className={rowClassName}
+                  onClick={() => { if (isClickable) onSelectSensor(row.sensorKey); }}
+                >
+                  <td className="px-4 py-3 font-medium text-slate-300 capitalize">{row.sensor.toLowerCase()}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className={`h-2.5 w-2.5 rounded-full ${row.status === 'critical' ? 'bg-red-500 animate-pulse' :
+                        row.status === 'warning' ? 'bg-amber-400' : 'bg-emerald-500'
+                        }`}></span>
+                      <span className={`text-xs font-semibold ${row.status === 'critical' ? 'text-red-400' :
+                        row.status === 'warning' ? 'text-amber-300' : 'text-emerald-400'
+                        }`}>{row.statusText}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-slate-200">
+                    {row.current !== null ? row.current.toFixed(2) : "--"}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-slate-400">
+                    {row.min !== null ? row.min : "0"} <span className="text-slate-600 px-1">~</span> {row.max !== null ? row.max : "∞"}
+                  </td>
+                  <td className="px-4 py-3 font-mono text-amber-400/90">
+                    {row.forecast !== null ? row.forecast.toFixed(2) : "--"}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -447,17 +497,20 @@ function PredictionSummary({ summaryStats, timeline }) {
 
 function App() {
   const [machineId, setMachineId] = useState("M-231");
-  const [timeWindowMinutes, setTimeWindowMinutes] = useState(240);
+  const [timeWindowMinutes, setTimeWindowMinutes] = useState(120);
   const [controlRoomData, setControlRoomData] = useState(null);
   const [limitOverrides, setLimitOverrides] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selectedSensor, setSelectedSensor] = useState(null);
+
+  const selectedOption = TIME_WINDOW_OPTIONS.find(o => o.value === timeWindowMinutes) || TIME_WINDOW_OPTIONS[0];
 
   const fetchControlRoom = useCallback(async () => {
     try {
       setLoading(true);
       const response = await axios.get(`${API_BASE}/api/control-room/${machineId}`, {
-        params: { time_window: timeWindowMinutes },
+        params: { time_window: timeWindowMinutes, future_window: selectedOption.futureMinutes },
       });
       setControlRoomData(response.data);
       setError(null);
@@ -466,7 +519,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [machineId, timeWindowMinutes]);
+  }, [machineId, timeWindowMinutes, selectedOption.futureMinutes]);
 
   useEffect(() => {
     fetchControlRoom();
@@ -476,6 +529,7 @@ function App() {
 
   useEffect(() => {
     setLimitOverrides({});
+    setSelectedSensor(null);
   }, [machineId, timeWindowMinutes]);
 
   const safeLimits = controlRoomData?.safe_limits || {};
@@ -559,7 +613,51 @@ function App() {
     };
   }, [breaches.length, adjustedRiskScore, activeRootCauses]);
 
-  const activeSensor = activeRootCauses[0] || "Injection_pressure";
+  // --- Telemetry status map for auto-switching logic ---
+  const telemetryStatuses = useMemo(() => {
+    const statuses = {};
+    const limits = effectiveLimits;
+    Object.keys(limits).forEach((sensor) => {
+      const current = toNumber(latestSensors[sensor]);
+      const min = toNumber(limits[sensor]?.min);
+      const max = toNumber(limits[sensor]?.max);
+      let status = "good";
+      if (current !== null) {
+        let span = 100;
+        if (min !== null && max !== null) span = max - min;
+        else if (max !== null) span = max;
+        else if (min !== null) span = min;
+        if ((min !== null && current < min) || (max !== null && current > max)) {
+          status = "critical";
+        } else if (
+          (min !== null && current - min < span * 0.1) ||
+          (max !== null && max - current < span * 0.1)
+        ) {
+          status = "warning";
+        }
+      }
+      statuses[sensor] = status;
+    });
+    return statuses;
+  }, [latestSensors, effectiveLimits]);
+
+  // Find the first abnormal sensor (critical first, then warning)
+  const firstAbnormalSensor = useMemo(() => {
+    const critical = Object.keys(telemetryStatuses).find(s => telemetryStatuses[s] === "critical");
+    if (critical) return critical;
+    const warning = Object.keys(telemetryStatuses).find(s => telemetryStatuses[s] === "warning");
+    return warning || null;
+  }, [telemetryStatuses]);
+
+  // Smart auto-switch: clear selection if sensor returned to normal
+  useEffect(() => {
+    if (selectedSensor && telemetryStatuses[selectedSensor] === "good") {
+      setSelectedSensor(firstAbnormalSensor);
+    }
+  }, [telemetryStatuses, selectedSensor, firstAbnormalSensor]);
+
+  // Derive activeSensor: user selection > first abnormal > null (all normal)
+  const activeSensor = selectedSensor || firstAbnormalSensor;
 
   if (loading && !controlRoomData) {
     return (
@@ -590,12 +688,20 @@ function App() {
             <SystemHealthMonitor timeline={displayTimeline} riskScore={currentHealth.risk_score} />
           </div>
 
-          {/* Section B & C: Side-by-Side row */}
-          <div className="col-span-12 lg:col-span-8 flex flex-col">
+          {/* Section B & C: Stacked vertically full width */}
+          <div className="col-span-12 flex flex-col">
             <RootCauseAnalyzer timeline={displayTimeline} sensor={activeSensor} safeLimits={effectiveLimits} />
           </div>
-          <div className="col-span-12 lg:col-span-4 flex flex-col h-full">
-            <TelemetryPanel timeline={displayTimeline} latestSensors={latestSensors} safeLimits={effectiveLimits} />
+          <div className="col-span-12 flex flex-col h-[500px]">
+            <TelemetryPanel
+              timeline={displayTimeline}
+              latestSensors={latestSensors}
+              safeLimits={effectiveLimits}
+              selectedSensor={selectedSensor}
+              onSelectSensor={setSelectedSensor}
+              timeWindowOptions={TIME_WINDOW_OPTIONS}
+              currentTimeWindow={selectedOption}
+            />
           </div>
 
           {/* Section D: Full Width Bottom */}

@@ -25,7 +25,7 @@ SAFE_LIMITS = {
     },
     "Cyl_tmp_z3": {
         "min": 0.0,
-        "max": 563.1,
+        "max": 563.1,#563.1
         "unit": "°C"
     },
     "Cyl_tmp_z4": {

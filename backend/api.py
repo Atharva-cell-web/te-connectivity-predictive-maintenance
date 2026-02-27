@@ -5,6 +5,7 @@ from data_access import build_control_room_payload, get_recent_window
 from forecasting import generate_forecast
 from config_limits import SAFE_LIMITS
 import pandas as pd
+from datetime import datetime
 
 app = FastAPI()
 
@@ -34,19 +35,22 @@ def get_machine_status(machine_id: str):
 def get_control_room_data(
     machine_id: str,
     time_window: int = Query(default=240, ge=30, le=1440),
+    future_window: int = Query(default=35, ge=5, le=60),
 ):
     """
     Returns a unified payload for Control Room sections:
     machine info, summary stats, health state, timeline, and safe limits.
     """
     try:
-        return build_control_room_payload(machine_id=machine_id, time_window=time_window)
+        print(f"[REQUEST] Machine: {machine_id} | Time: {datetime.now().strftime('%H:%M:%S')} | Future: {future_window}m", flush=True)
+        result = build_control_room_payload(machine_id=machine_id, time_window=time_window, future_window=future_window)
+        return result
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        print(f"Error in Control Room API: {e}")
+        print(f"Error in Control Room API: {e}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -75,8 +79,8 @@ def get_trend_data(machine_id: str, parameter: str):
         if len(history_df) > 1000:
             history_df = history_df.iloc[::30, :].copy()
 
-       # 2. Generate Forecast
-        # We pass the CORRECT column name found above
+        # 2. Generate Forecast
+        # We pass the CORRECT column name found above and the whole DF
         forecast_df = generate_forecast(history_df, target_col)
         
         # --- FIX: Lock Timestamp format to prevent browser IST conversion ---
