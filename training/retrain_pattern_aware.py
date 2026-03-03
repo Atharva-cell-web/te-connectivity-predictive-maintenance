@@ -66,6 +66,8 @@ def run_step(script_name: str, description: str) -> bool:
 def verify_outputs() -> dict:
     """Check which output files were created."""
     outputs = {
+        "context_features": PROJECT_ROOT / "processed" / "features" / "rolling_features_with_context.parquet",
+        "encodings": PROJECT_ROOT / "models" / "part_tool_encodings.json",
         "model_v2": PROJECT_ROOT / "models" / "lightgbm_scrap_risk_wide_v2.pkl",
         "feature_importance_csv": PROJECT_ROOT / "models" / "feature_importance.csv",
         "feature_importance_png": PROJECT_ROOT / "models" / "feature_importance.png",
@@ -100,8 +102,9 @@ def print_summary(outputs: dict):
         print("3. To use the new model, update backend/data_access.py line 26:")
         print('   CONTROL_MODEL_PATH = PROJECT_ROOT / "models" / "lightgbm_scrap_risk_wide_v2.pkl"')
         print("4. Restart FastAPI server to load the new model")
-        print("\n[NOTE] The model leverages existing rolling features (e.g., __std_15m, __mean_30m)")
-        print("[NOTE] These distinguish stable oscillations from true anomalies")
+        print("\n[NOTE] The model uses rolling features (e.g., __std_15m, __mean_30m)")
+        print("[NOTE] Plus part_number/tool_number context to learn tool-specific patterns")
+        print("[NOTE] This helps distinguish stable oscillations from true anomalies")
     else:
         print("\n[WARNING] Some outputs are missing. Check the logs above for errors.")
     
@@ -110,20 +113,30 @@ def print_summary(outputs: dict):
 
 def main():
     print("="*70)
-    print("PATTERN-AWARE MODEL RETRAINING PIPELINE")
+    print("PATTERN-AWARE MODEL RETRAINING PIPELINE (with part/tool context)")
     print("="*70)
     print(f"\nProject root: {PROJECT_ROOT}")
     print(f"Python: {sys.executable}")
-    print("\n[INFO] Skipping step4b — rolling features already exist in source data")
-    print("[INFO] Features like Cycle_time__std_15m, Cushion__mean_30m already computed")
+    print("\n[INFO] Pipeline steps:")
+    print("  1. Add part_number/tool_number context features (step4c)")
+    print("  2. Train LightGBM with context + rolling features (step5_3b)")
     
     total_start = time.time()
     
-    # Skip Step 1 — pattern features already exist
-    # Directly run Step 2 — train model
+    # Step 1: Add part/tool context features
+    step1_ok = run_step(
+        "step4c_add_part_tool_features.py",
+        "Adding part_number and tool_number context features"
+    )
+    
+    if not step1_ok:
+        print("\n[FATAL] Context feature extraction failed. Check error messages above.")
+        sys.exit(1)
+    
+    # Step 2: Train model with context features
     step2_ok = run_step(
         "step5_3b_train_lightgbm_wide.py",
-        "Training LightGBM with existing rolling features + class balancing"
+        "Training LightGBM with context + rolling features + class balancing"
     )
     
     if not step2_ok:

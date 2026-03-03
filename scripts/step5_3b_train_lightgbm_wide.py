@@ -21,18 +21,19 @@ def get_matplotlib():
     return plt
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-WIDE_FILE = PROJECT_ROOT / "processed" / "features" / "rolling_features_wide_labeled.parquet"
+WIDE_FILE = PROJECT_ROOT / "processed" / "features" / "rolling_features_with_context.parquet"
 MODEL_PATH = PROJECT_ROOT / "models" / "lightgbm_scrap_risk_wide_v2.pkl"
 
 # Pattern feature suffixes (already exist in data)
 PATTERN_SUFFIXES = ['__std_5m', '__std_15m', '__std_30m', '__mean_5m', '__mean_15m', '__mean_30m']
 
 # Columns to exclude from features
+# NOTE: tool_id_encoded, part_number_encoded, machine_id_encoded ARE included as features
 EXCLUDE_COLS = [
     'is_scrap', 'is_scrap_actual', 'early_scrap_risk', 'scrap_probability',
     'timestamp', 'event_timestamp', 'Time', 'time',
     'machine_id', 'machine_id_normalized', 'machine_definition',
-    'part_number', 'tool_number', 'tool_id'
+    'part_number', 'tool_number', 'tool_id'  # Exclude raw text versions only
 ]
 
 # Maximum rows for training (to fit in memory)
