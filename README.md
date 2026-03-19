@@ -72,7 +72,7 @@ Because `.gitignore` is configured, large training/raw data and `node_modules` a
 
 ## Automatic project sync
 
-If you want one command to stage changes, create a timestamped commit, pull, and push:
+If you want one command to stage all changes, create a timestamped commit, pull, and push:
 
 ```powershell
 .\sync_project.cmd
@@ -80,9 +80,10 @@ If you want one command to stage changes, create a timestamped commit, pull, and
 
 If there are no new file changes, the same command still performs sync-only behavior and will pull or push any pending branch commits so your local checkout and GitHub stay aligned.
 
-By default, this command uses one shared GitHub remote:
+By default, this command pulls from Atharva's shared repo and pushes the current branch to both GitHub remotes:
 
 - `origin` -> `Atharva-cell-web/te-connectivity-predictive-maintenance`
+- `vishnu` -> `Vishh70/te-connectivity-predictive-maintenance`
 
 If Windows cached the wrong GitHub account and push fails with `permission denied`, reset the repo auth first:
 
@@ -90,7 +91,7 @@ If Windows cached the wrong GitHub account and push fails with `permission denie
 .\scripts\fix_github_push_auth.ps1
 ```
 
-During the next push, sign in with any GitHub account that has collaborator access to the shared repo.
+During the next push, sign in with a GitHub account that can push to both repos.
 
 This repo also has local Git aliases configured:
 
@@ -99,6 +100,8 @@ git autosync
 git autosync-dry
 git autosync-staged
 ```
+
+`git autosync` stages all files with `git add -A`, creates a timestamped commit if needed, pulls from `origin`, then pushes the current branch to both `origin` and `vishnu`.
 
 You can also preview what will be committed without changing Git state:
 
