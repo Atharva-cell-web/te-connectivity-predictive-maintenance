@@ -6,7 +6,7 @@ param(
     [switch]$SkipPush,
     [switch]$UseCurrentStaging,
     [string]$RemoteName = "origin",
-    [string]$GitHubOwner = "atharvap2004",
+    [string]$GitHubOwner = "Atharva-cell-web",
     [string]$GitHubRepo = "te-connectivity-predictive-maintenance"
 )
 

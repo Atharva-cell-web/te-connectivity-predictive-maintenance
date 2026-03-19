@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$RemoteName = "origin",
-    [string]$GitHubOwner = "atharvap2004",
+    [string]$GitHubOwner = "Atharva-cell-web",
     [string]$GitHubRepo = "te-connectivity-predictive-maintenance",
     [switch]$ResetGitHubCredentialsOnly
 )

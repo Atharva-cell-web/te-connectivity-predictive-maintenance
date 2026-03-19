@@ -82,7 +82,7 @@ If there are no new file changes, the same command still performs sync-only beha
 
 By default, this command uses one shared GitHub remote:
 
-- `origin` -> `atharvap2004/te-connectivity-predictive-maintenance`
+- `origin` -> `Atharva-cell-web/te-connectivity-predictive-maintenance`
 
 If Windows cached the wrong GitHub account and push fails with `permission denied`, reset the repo auth first:
 
