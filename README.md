@@ -78,6 +78,12 @@ If you want one command to stage changes, create a timestamped commit, pull, and
 .\sync_project.cmd
 ```
 
+This repo is pinned to GitHub user `atharvap2004` for pushes. If Windows cached the wrong GitHub account and push fails with `permission denied`, reset the repo auth first:
+
+```powershell
+.\scripts\fix_github_push_auth.ps1
+```
+
 This repo also has local Git aliases configured:
 
 ```powershell
@@ -109,4 +115,5 @@ The same command is available through npm:
 ```powershell
 npm run sync:auto
 npm run sync:auto:dry
+npm run sync:auto:auth
 ```

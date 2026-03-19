@@ -4,7 +4,11 @@ param(
     [switch]$DryRun,
     [switch]$SkipPull,
     [switch]$SkipPush,
-    [switch]$UseCurrentStaging
+    [switch]$UseCurrentStaging,
+    [string]$RemoteName = "origin",
+    [string]$GitHubUsername = "atharvap2004",
+    [string]$GitHubOwner = "atharvap2004",
+    [string]$GitHubRepo = "te-connectivity-predictive-maintenance"
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,8 +69,62 @@ function Restore-IndexSnapshot {
     Invoke-Git -Arguments @("status", "--short") | Out-Null
 }
 
+function Ensure-RepoGitHubIdentity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RemoteName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GitHubUsername,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GitHubOwner,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GitHubRepo
+    )
+
+    $currentRemoteUrl = (Invoke-Git -Arguments @("remote", "get-url", $RemoteName)).Trim()
+    if ($currentRemoteUrl -notmatch '^https://(?:[^@/]+@)?github\.com/(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$') {
+        return $currentRemoteUrl
+    }
+
+    if ($Matches.owner -ne $GitHubOwner -or $Matches.repo -ne $GitHubRepo) {
+        return $currentRemoteUrl
+    }
+
+    $expectedRemoteUrl = "https://$GitHubUsername@github.com/$GitHubOwner/$GitHubRepo.git"
+    if ($currentRemoteUrl -ne $expectedRemoteUrl) {
+        Invoke-Git -Arguments @("remote", "set-url", $RemoteName, $expectedRemoteUrl) | Out-Null
+        $currentRemoteUrl = $expectedRemoteUrl
+    }
+
+    Invoke-Git -Arguments @("config", "--local", "credential.https://github.com.username", $GitHubUsername) | Out-Null
+    return $currentRemoteUrl
+}
+
+function Throw-GitHubAuthError {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RemoteName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GitHubUsername,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OriginalError
+    )
+
+    $helperPath = Join-Path $RepoRoot "scripts\fix_github_push_auth.ps1"
+    throw "GitHub authentication failed for remote '$RemoteName'. This repo is pinned to GitHub user '$GitHubUsername'. Run:`n  powershell -NoProfile -ExecutionPolicy Bypass -File `"$helperPath`"`nThen retry the sync command.`n`nOriginal error:`n$OriginalError"
+}
+
 $repoRoot = (Invoke-Git -Arguments @("rev-parse", "--show-toplevel")).Trim()
 Set-Location $repoRoot
+$remoteUrl = Ensure-RepoGitHubIdentity -RemoteName $RemoteName -GitHubUsername $GitHubUsername -GitHubOwner $GitHubOwner -GitHubRepo $GitHubRepo
 
 $branch = (Invoke-Git -Arguments @("branch", "--show-current")).Trim()
 if (-not $branch) {
@@ -103,6 +161,7 @@ try {
 
     Write-Host "Repository : $repoRoot"
     Write-Host "Branch     : $branch"
+    Write-Host "Remote     : $remoteUrl"
     Write-Host "Commit     : $Message"
     if ($summary) {
         Write-Host "Changes    : $summary"
@@ -126,11 +185,29 @@ try {
     Invoke-Git -Arguments @("commit", "-m", $Message) | Out-Null
 
     if (-not $SkipPull) {
-        Invoke-Git -Arguments @("pull", "--rebase", "origin", $branch) | Out-Null
+        try {
+            Invoke-Git -Arguments @("pull", "--rebase", $RemoteName, $branch) | Out-Null
+        }
+        catch {
+            if ($_.Exception.Message -match "permission denied|Authentication failed|403|401") {
+                Throw-GitHubAuthError -RepoRoot $repoRoot -RemoteName $RemoteName -GitHubUsername $GitHubUsername -OriginalError $_.Exception.Message
+            }
+
+            throw
+        }
     }
 
     if (-not $SkipPush) {
-        Invoke-Git -Arguments @("push", "origin", $branch) | Out-Null
+        try {
+            Invoke-Git -Arguments @("push", $RemoteName, $branch) | Out-Null
+        }
+        catch {
+            if ($_.Exception.Message -match "permission denied|Authentication failed|403|401") {
+                Throw-GitHubAuthError -RepoRoot $repoRoot -RemoteName $RemoteName -GitHubUsername $GitHubUsername -OriginalError $_.Exception.Message
+            }
+
+            throw
+        }
     }
 
     $head = (Invoke-Git -Arguments @("rev-parse", "--short", "HEAD")).Trim()
