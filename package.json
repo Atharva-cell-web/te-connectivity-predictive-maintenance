@@ -1,4 +1,9 @@
 {
+  "scripts": {
+    "sync:auto": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\git_auto_sync.ps1",
+    "sync:auto:dry": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\git_auto_sync.ps1 -DryRun",
+    "sync:auto:auth": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\fix_github_push_auth.ps1"
+  },
   "dependencies": {
     "lucide-react": "^0.574.0",
     "recharts": "^3.7.0"
