@@ -98,6 +98,36 @@ function Clear-RepoCredentialUsername {
     }
 }
 
+function Get-BranchSyncState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RemoteName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Branch
+    )
+
+    $remoteRef = "refs/remotes/$RemoteName/$Branch"
+    $remoteRefResult = Invoke-GitAllowFailure -Arguments @("rev-parse", "--verify", $remoteRef)
+
+    if ($remoteRefResult.ExitCode -ne 0) {
+        return [PSCustomObject]@{
+            HasRemoteBranch = $false
+            Ahead           = 0
+            Behind          = 0
+        }
+    }
+
+    $counts = (Invoke-Git -Arguments @("rev-list", "--left-right", "--count", "HEAD...$remoteRef") | Select-Object -First 1).Trim()
+    $parts = $counts -split "\s+"
+
+    return [PSCustomObject]@{
+        HasRemoteBranch = $true
+        Ahead           = [int]$parts[0]
+        Behind          = [int]$parts[1]
+    }
+}
+
 function Ensure-SharedRemote {
     param(
         [Parameter(Mandatory = $true)]
@@ -154,6 +184,7 @@ if (-not $branch) {
 
 $gitDir = Get-GitDir
 $indexSnapshot = $null
+$createdCommit = $false
 
 try {
     if ($DryRun) {
@@ -166,46 +197,70 @@ try {
 
     $stagedFiles = Invoke-Git -Arguments @("diff", "--cached", "--name-only")
     $stagedFiles = $stagedFiles | Where-Object { $_.Trim() }
-
-    if (-not $stagedFiles -or $stagedFiles.Count -eq 0) {
-        Write-Host "No staged changes to commit."
-        return
-    }
-
-    $summary = Invoke-Git -Arguments @("diff", "--cached", "--shortstat")
-    $summary = ($summary -join " ").Trim()
-
-    if (-not $Message) {
-        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-        $Message = "auto sync: $timestamp"
-    }
+    $syncState = Get-BranchSyncState -RemoteName $RemoteName -Branch $branch
+    $needsPull = -not $SkipPull -and $syncState.HasRemoteBranch -and $syncState.Behind -gt 0
+    $needsPush = -not $SkipPush -and ((-not $syncState.HasRemoteBranch) -or $syncState.Ahead -gt 0)
 
     Write-Host "Repository : $repoRoot"
     Write-Host "Branch     : $branch"
     Write-Host "Remote     : $RemoteName -> $remoteUrl"
-    Write-Host "Commit     : $Message"
-    if ($summary) {
-        Write-Host "Changes    : $summary"
+    if ($syncState.HasRemoteBranch) {
+        Write-Host "Sync state : ahead $($syncState.Ahead), behind $($syncState.Behind)"
     }
-    Write-Host "Files      : $($stagedFiles.Count)"
-
-    foreach ($file in $stagedFiles | Select-Object -First 20) {
-        Write-Host "  $file"
+    else {
+        Write-Host "Sync state : remote branch does not exist yet"
     }
 
-    if ($stagedFiles.Count -gt 20) {
-        Write-Host "  ..."
+    if (-not $stagedFiles -or $stagedFiles.Count -eq 0) {
+        Write-Host "Commit     : none (sync only)"
+        Write-Host "Files      : 0"
+
+        if (-not $needsPull -and -not $needsPush) {
+            Write-Host ""
+            Write-Host "Nothing to sync. Local and remote are already aligned."
+            return
+        }
+
+        if ($DryRun) {
+            Write-Host ""
+            Write-Host "Dry run only. No pull or push was executed."
+            return
+        }
+    }
+    else {
+        $summary = Invoke-Git -Arguments @("diff", "--cached", "--shortstat")
+        $summary = ($summary -join " ").Trim()
+
+        if (-not $Message) {
+            $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            $Message = "auto sync: $timestamp"
+        }
+
+        Write-Host "Commit     : $Message"
+        if ($summary) {
+            Write-Host "Changes    : $summary"
+        }
+        Write-Host "Files      : $($stagedFiles.Count)"
+
+        foreach ($file in $stagedFiles | Select-Object -First 20) {
+            Write-Host "  $file"
+        }
+
+        if ($stagedFiles.Count -gt 20) {
+            Write-Host "  ..."
+        }
+
+        if ($DryRun) {
+            Write-Host ""
+            Write-Host "Dry run only. No commit, pull, or push was executed."
+            return
+        }
+
+        Invoke-Git -Arguments @("commit", "-m", $Message) | Out-Null
+        $createdCommit = $true
     }
 
-    if ($DryRun) {
-        Write-Host ""
-        Write-Host "Dry run only. No commit, pull, or push was executed."
-        return
-    }
-
-    Invoke-Git -Arguments @("commit", "-m", $Message) | Out-Null
-
-    if (-not $SkipPull) {
+    if (-not $SkipPull -and ($needsPull -or ($createdCommit -and $syncState.HasRemoteBranch))) {
         try {
             Invoke-Git -Arguments @("pull", "--rebase", $RemoteName, $branch) | Out-Null
         }
@@ -218,7 +273,7 @@ try {
         }
     }
 
-    if (-not $SkipPush) {
+    if (-not $SkipPush -and ($needsPush -or $createdCommit)) {
         try {
             Invoke-Git -Arguments @("push", $RemoteName, $branch) | Out-Null
         }
@@ -234,7 +289,12 @@ try {
     $head = (Invoke-Git -Arguments @("rev-parse", "--short", "HEAD")).Trim()
     Write-Host ""
     Write-Host "Auto sync finished successfully."
-    Write-Host "Commit hash: $head"
+    if ($createdCommit) {
+        Write-Host "Commit hash: $head"
+    }
+    else {
+        Write-Host "Commit hash: unchanged ($head)"
+    }
 }
 finally {
     if ($DryRun -and $indexSnapshot -and (Test-Path $indexSnapshot)) {

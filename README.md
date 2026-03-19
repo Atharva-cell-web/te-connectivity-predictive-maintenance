@@ -78,6 +78,8 @@ If you want one command to stage changes, create a timestamped commit, pull, and
 .\sync_project.cmd
 ```
 
+If there are no new file changes, the same command still performs sync-only behavior and will pull or push any pending branch commits so your local checkout and GitHub stay aligned.
+
 By default, this command uses one shared GitHub remote:
 
 - `origin` -> `atharvap2004/te-connectivity-predictive-maintenance`
