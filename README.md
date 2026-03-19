@@ -78,11 +78,18 @@ If you want one command to stage changes, create a timestamped commit, pull, and
 .\sync_project.cmd
 ```
 
-This repo is pinned to GitHub user `atharvap2004` for pushes. If Windows cached the wrong GitHub account and push fails with `permission denied`, reset the repo auth first:
+By default, this command pulls from `origin` and pushes to both GitHub remotes:
+
+- `origin` -> `atharvap2004/te-connectivity-predictive-maintenance`
+- `vishh70` -> `Vishh70/te-connectivity-predictive-maintenance`
+
+If Windows cached the wrong GitHub account and push fails with `permission denied`, reset the repo auth first:
 
 ```powershell
 .\scripts\fix_github_push_auth.ps1
 ```
+
+During the next push, sign in as `atharvap2004` for `origin` and `Vishh70` for `vishh70` if Git asks for both accounts.
 
 This repo also has local Git aliases configured:
 

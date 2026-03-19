@@ -1,8 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$RemoteName = "origin",
-    [string]$GitHubUsername = "atharvap2004",
-    [string]$GitHubOwner = "atharvap2004",
+    [string]$PrimaryRemoteName = "origin",
+    [string]$PrimaryGitHubUsername = "atharvap2004",
+    [string]$MirrorRemoteName = "vishh70",
+    [string]$MirrorGitHubUsername = "Vishh70",
     [string]$GitHubRepo = "te-connectivity-predictive-maintenance",
     [switch]$SkipCredentialCleanup
 )
@@ -32,6 +33,28 @@ function Invoke-Git {
     return $output
 }
 
+function Invoke-GitAllowFailure {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & git @Arguments 2>&1 | ForEach-Object { $_.ToString() }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    return [PSCustomObject]@{
+        Output   = $output
+        ExitCode = $exitCode
+    }
+}
+
 function Remove-WindowsCredential {
     param(
         [Parameter(Mandatory = $true)]
@@ -53,33 +76,86 @@ function Remove-WindowsCredential {
     }
 }
 
+function Clear-RepoCredentialUsername {
+    $result = Invoke-GitAllowFailure -Arguments @("config", "--local", "--unset-all", "credential.https://github.com.username")
+    $outputText = ($result.Output -join " ").Trim()
+    if ($result.ExitCode -ne 0 -and $outputText -and $outputText -notmatch "No such section or key") {
+        throw "git config --local --unset-all credential.https://github.com.username failed:`n$($result.Output)"
+    }
+}
+
+function New-RemoteSpec {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GitHubUsername,
+
+        [Parameter(Mandatory = $true)]
+        [string]$GitHubRepo
+    )
+
+    return [PSCustomObject]@{
+        Name     = $Name
+        Username = $GitHubUsername
+        Owner    = $GitHubUsername
+        Repo     = $GitHubRepo
+    }
+}
+
+function Ensure-RepoGitHubRemote {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$RemoteSpec
+    )
+
+    $expectedRemoteUrl = "https://$($RemoteSpec.Username)@github.com/$($RemoteSpec.Owner)/$($RemoteSpec.Repo).git"
+    $currentRemoteResult = Invoke-GitAllowFailure -Arguments @("remote", "get-url", $RemoteSpec.Name)
+    $currentRemoteUrl = ($currentRemoteResult.Output -join "").Trim()
+
+    if ($currentRemoteResult.ExitCode -ne 0 -or -not $currentRemoteUrl) {
+        Invoke-Git -Arguments @("remote", "add", $RemoteSpec.Name, $expectedRemoteUrl) | Out-Null
+        $currentRemoteUrl = $expectedRemoteUrl
+    }
+    elseif ($currentRemoteUrl -ne $expectedRemoteUrl) {
+        Invoke-Git -Arguments @("remote", "set-url", $RemoteSpec.Name, $expectedRemoteUrl) | Out-Null
+        $currentRemoteUrl = $expectedRemoteUrl
+    }
+
+    return [PSCustomObject]@{
+        Name     = $RemoteSpec.Name
+        Username = $RemoteSpec.Username
+        Url      = $currentRemoteUrl
+    }
+}
+
 $repoRoot = (Invoke-Git -Arguments @("rev-parse", "--show-toplevel")).Trim()
 Set-Location $repoRoot
 
-$expectedRemoteUrl = "https://$GitHubUsername@github.com/$GitHubOwner/$GitHubRepo.git"
-Invoke-Git -Arguments @("remote", "set-url", $RemoteName, $expectedRemoteUrl) | Out-Null
-Invoke-Git -Arguments @("config", "--local", "credential.https://github.com.username", $GitHubUsername) | Out-Null
+$remoteSpecs = @(
+    New-RemoteSpec -Name $PrimaryRemoteName -GitHubUsername $PrimaryGitHubUsername -GitHubRepo $GitHubRepo
+    New-RemoteSpec -Name $MirrorRemoteName -GitHubUsername $MirrorGitHubUsername -GitHubRepo $GitHubRepo
+)
+$configuredRemotes = foreach ($remoteSpec in $remoteSpecs) {
+    Ensure-RepoGitHubRemote -RemoteSpec $remoteSpec
+}
+Clear-RepoCredentialUsername
 
 $removedAccounts = @()
 $removedTargets = @()
+$allowedGitHubUsers = $remoteSpecs | ForEach-Object { $_.Username } | Sort-Object -Unique
 
 if (-not $SkipCredentialCleanup) {
     $storedAccounts = & git credential-manager github list 2>$null | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ }
     foreach ($account in $storedAccounts) {
-        if ($account -eq $GitHubUsername) {
+        if ($allowedGitHubUsers -contains $account) {
             continue
         }
 
-        $previousErrorActionPreference = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        try {
-            & git credential-manager github logout $account --no-ui 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                $removedAccounts += $account
-            }
-        }
-        finally {
-            $ErrorActionPreference = $previousErrorActionPreference
+        $logoutResult = Invoke-GitAllowFailure -Arguments @("credential-manager", "github", "logout", $account, "--no-ui")
+        if ($logoutResult.ExitCode -eq 0) {
+            $removedAccounts += $account
         }
     }
 
@@ -97,7 +173,7 @@ if (-not $SkipCredentialCleanup) {
             continue
         }
 
-        if ($target -match 'git:https://(?<user>[^@]+)@github\.com$' -and $Matches.user -ne $GitHubUsername) {
+        if ($target -match 'git:https://(?<user>[^@]+)@github\.com$' -and $allowedGitHubUsers -notcontains $Matches.user) {
             Remove-WindowsCredential -Target $target
             $removedTargets += $target
         }
@@ -105,8 +181,14 @@ if (-not $SkipCredentialCleanup) {
 }
 
 Write-Host "Repository : $repoRoot"
-Write-Host "Remote     : $expectedRemoteUrl"
-Write-Host "GitHub user: $GitHubUsername"
+Write-Host "Configured remotes:"
+foreach ($configuredRemote in $configuredRemotes) {
+    Write-Host "  $($configuredRemote.Name) -> $($configuredRemote.Url)"
+}
+Write-Host "Allowed GitHub users:"
+foreach ($username in $allowedGitHubUsers) {
+    Write-Host "  $username"
+}
 
 if ($removedAccounts.Count -gt 0) {
     Write-Host "Removed GCM accounts:"
@@ -124,5 +206,5 @@ if ($removedTargets.Count -gt 0) {
 
 Write-Host ""
 Write-Host "Next step:"
-Write-Host "  Run 'git push origin main' or '.\\sync_project.cmd'."
-Write-Host "  If GitHub prompts for login, sign in as '$GitHubUsername'."
+Write-Host "  Run 'git push origin main', 'git push vishh70 main', or '.\sync_project.cmd'."
+Write-Host "  If GitHub prompts for login, sign in as 'atharvap2004' for origin and 'Vishh70' for vishh70."
