@@ -69,3 +69,59 @@ git push -u origin main
 ```
 
 Because `.gitignore` is configured, large training/raw data and `node_modules` are excluded.
+
+## Automatic project sync
+
+If you want one command to stage changes, create a timestamped commit, pull, and push:
+
+```powershell
+.\sync_project.cmd
+```
+
+If there are no new file changes, the same command still performs sync-only behavior and will pull or push any pending branch commits so your local checkout and GitHub stay aligned.
+
+By default, this command uses one shared GitHub remote:
+
+- `origin` -> `Atharva-cell-web/te-connectivity-predictive-maintenance`
+
+If Windows cached the wrong GitHub account and push fails with `permission denied`, reset the repo auth first:
+
+```powershell
+.\scripts\fix_github_push_auth.ps1
+```
+
+During the next push, sign in with any GitHub account that has collaborator access to the shared repo.
+
+This repo also has local Git aliases configured:
+
+```powershell
+git autosync
+git autosync-dry
+git autosync-staged
+```
+
+You can also preview what will be committed without changing Git state:
+
+```powershell
+.\sync_project.cmd -DryRun
+```
+
+If you want a custom commit message:
+
+```powershell
+.\sync_project.cmd -Message "cleanup old scrap_prediction_v1 files"
+```
+
+If you only want to commit the files that are already staged in Source Control:
+
+```powershell
+.\sync_project.cmd -UseCurrentStaging
+```
+
+The same command is available through npm:
+
+```powershell
+npm run sync:auto
+npm run sync:auto:dry
+npm run sync:auto:auth
+```
