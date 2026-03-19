@@ -5,11 +5,8 @@ param(
     [switch]$SkipPull,
     [switch]$SkipPush,
     [switch]$UseCurrentStaging,
-    [string]$PullRemoteName = "origin",
-    [string[]]$PushRemoteNames = @("origin", "vishh70"),
-    [string]$PrimaryGitHubUsername = "atharvap2004",
-    [string]$MirrorRemoteName = "vishh70",
-    [string]$MirrorGitHubUsername = "Vishh70",
+    [string]$RemoteName = "origin",
+    [string]$GitHubOwner = "atharvap2004",
     [string]$GitHubRepo = "te-connectivity-predictive-maintenance"
 )
 
@@ -101,50 +98,32 @@ function Clear-RepoCredentialUsername {
     }
 }
 
-function New-RemoteSpec {
+function Ensure-SharedRemote {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Name,
+        [string]$RemoteName,
 
         [Parameter(Mandatory = $true)]
-        [string]$GitHubUsername,
+        [string]$GitHubOwner,
 
         [Parameter(Mandatory = $true)]
         [string]$GitHubRepo
     )
 
-    return [PSCustomObject]@{
-        Name     = $Name
-        Username = $GitHubUsername
-        Owner    = $GitHubUsername
-        Repo     = $GitHubRepo
-    }
-}
-
-function Ensure-RepoGitHubRemote {
-    param(
-        [Parameter(Mandatory = $true)]
-        [psobject]$RemoteSpec
-    )
-
-    $expectedRemoteUrl = "https://$($RemoteSpec.Username)@github.com/$($RemoteSpec.Owner)/$($RemoteSpec.Repo).git"
-    $currentRemoteResult = Invoke-GitAllowFailure -Arguments @("remote", "get-url", $RemoteSpec.Name)
+    $expectedRemoteUrl = "https://github.com/$GitHubOwner/$GitHubRepo.git"
+    $currentRemoteResult = Invoke-GitAllowFailure -Arguments @("remote", "get-url", $RemoteName)
     $currentRemoteUrl = ($currentRemoteResult.Output -join "").Trim()
 
     if ($currentRemoteResult.ExitCode -ne 0 -or -not $currentRemoteUrl) {
-        Invoke-Git -Arguments @("remote", "add", $RemoteSpec.Name, $expectedRemoteUrl) | Out-Null
+        Invoke-Git -Arguments @("remote", "add", $RemoteName, $expectedRemoteUrl) | Out-Null
         $currentRemoteUrl = $expectedRemoteUrl
     }
     elseif ($currentRemoteUrl -ne $expectedRemoteUrl) {
-        Invoke-Git -Arguments @("remote", "set-url", $RemoteSpec.Name, $expectedRemoteUrl) | Out-Null
+        Invoke-Git -Arguments @("remote", "set-url", $RemoteName, $expectedRemoteUrl) | Out-Null
         $currentRemoteUrl = $expectedRemoteUrl
     }
 
-    return [PSCustomObject]@{
-        Name     = $RemoteSpec.Name
-        Username = $RemoteSpec.Username
-        Url      = $currentRemoteUrl
-    }
+    return $currentRemoteUrl
 }
 
 function Throw-GitHubAuthError {
@@ -156,44 +135,16 @@ function Throw-GitHubAuthError {
         [string]$RemoteName,
 
         [Parameter(Mandatory = $true)]
-        [string]$GitHubUsername,
-
-        [Parameter(Mandatory = $true)]
         [string]$OriginalError
     )
 
     $helperPath = Join-Path $RepoRoot "scripts\fix_github_push_auth.ps1"
-    throw "GitHub authentication failed for remote '$RemoteName' using GitHub user '$GitHubUsername'. Run:`n  powershell -NoProfile -ExecutionPolicy Bypass -File `"$helperPath`"`nThen retry the sync command and sign in to both GitHub accounts when prompted.`n`nOriginal error:`n$OriginalError"
+    throw "GitHub authentication failed for remote '$RemoteName'. Run:`n  powershell -NoProfile -ExecutionPolicy Bypass -File `"$helperPath`"`nThen retry the sync command and sign in with a GitHub account that has collaborator access to the shared repo.`n`nOriginal error:`n$OriginalError"
 }
 
 $repoRoot = (Invoke-Git -Arguments @("rev-parse", "--show-toplevel")).Trim()
 Set-Location $repoRoot
-
-$remoteSpecs = @(
-    New-RemoteSpec -Name $PullRemoteName -GitHubUsername $PrimaryGitHubUsername -GitHubRepo $GitHubRepo
-    New-RemoteSpec -Name $MirrorRemoteName -GitHubUsername $MirrorGitHubUsername -GitHubRepo $GitHubRepo
-)
-
-$configuredRemotes = @{}
-foreach ($remoteSpec in $remoteSpecs) {
-    $configuredRemote = Ensure-RepoGitHubRemote -RemoteSpec $remoteSpec
-    $configuredRemotes[$configuredRemote.Name] = $configuredRemote
-}
-
-$pushRemoteNames = $PushRemoteNames | Where-Object { $_ } | Select-Object -Unique
-$pushRemotes = foreach ($pushRemoteName in $pushRemoteNames) {
-    if (-not $configuredRemotes.ContainsKey($pushRemoteName)) {
-        throw "Push remote '$pushRemoteName' is not configured."
-    }
-
-    $configuredRemotes[$pushRemoteName]
-}
-
-if (-not $configuredRemotes.ContainsKey($PullRemoteName)) {
-    throw "Pull remote '$PullRemoteName' is not configured."
-}
-
-$pullRemote = $configuredRemotes[$PullRemoteName]
+$remoteUrl = Ensure-SharedRemote -RemoteName $RemoteName -GitHubOwner $GitHubOwner -GitHubRepo $GitHubRepo
 Clear-RepoCredentialUsername
 
 $branch = (Invoke-Git -Arguments @("branch", "--show-current")).Trim()
@@ -231,11 +182,7 @@ try {
 
     Write-Host "Repository : $repoRoot"
     Write-Host "Branch     : $branch"
-    Write-Host "Pull remote: $($pullRemote.Name) -> $($pullRemote.Url)"
-    Write-Host "Push remotes:"
-    foreach ($pushRemote in $pushRemotes) {
-        Write-Host "  $($pushRemote.Name) -> $($pushRemote.Url)"
-    }
+    Write-Host "Remote     : $RemoteName -> $remoteUrl"
     Write-Host "Commit     : $Message"
     if ($summary) {
         Write-Host "Changes    : $summary"
@@ -260,11 +207,11 @@ try {
 
     if (-not $SkipPull) {
         try {
-            Invoke-Git -Arguments @("pull", "--rebase", $pullRemote.Name, $branch) | Out-Null
+            Invoke-Git -Arguments @("pull", "--rebase", $RemoteName, $branch) | Out-Null
         }
         catch {
             if ($_.Exception.Message -match "permission denied|Authentication failed|403|401") {
-                Throw-GitHubAuthError -RepoRoot $repoRoot -RemoteName $pullRemote.Name -GitHubUsername $pullRemote.Username -OriginalError $_.Exception.Message
+                Throw-GitHubAuthError -RepoRoot $repoRoot -RemoteName $RemoteName -OriginalError $_.Exception.Message
             }
 
             throw
@@ -272,17 +219,15 @@ try {
     }
 
     if (-not $SkipPush) {
-        foreach ($pushRemote in $pushRemotes) {
-            try {
-                Invoke-Git -Arguments @("push", $pushRemote.Name, $branch) | Out-Null
+        try {
+            Invoke-Git -Arguments @("push", $RemoteName, $branch) | Out-Null
+        }
+        catch {
+            if ($_.Exception.Message -match "permission denied|Authentication failed|403|401") {
+                Throw-GitHubAuthError -RepoRoot $repoRoot -RemoteName $RemoteName -OriginalError $_.Exception.Message
             }
-            catch {
-                if ($_.Exception.Message -match "permission denied|Authentication failed|403|401") {
-                    Throw-GitHubAuthError -RepoRoot $repoRoot -RemoteName $pushRemote.Name -GitHubUsername $pushRemote.Username -OriginalError $_.Exception.Message
-                }
 
-                throw
-            }
+            throw
         }
     }
 
