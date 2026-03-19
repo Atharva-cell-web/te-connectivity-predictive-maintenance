@@ -254,6 +254,14 @@ if (-not $branch) {
     throw "Could not detect the current branch."
 }
 
+$protectedPushBranches = @("main")
+$pushBranchName = if ($protectedPushBranches -contains $branch) {
+    "autosync-$branch"
+}
+else {
+    $branch
+}
+
 $gitDir = Get-GitDir
 $indexSnapshot = $null
 $createdCommit = $false
@@ -270,20 +278,18 @@ try {
     $stagedFiles = Invoke-Git -Arguments @("diff", "--cached", "--name-only")
     $stagedFiles = $stagedFiles | Where-Object { $_.Trim() }
 
-    $syncStates = @{}
-    $allRemoteNames = @($PullRemoteName) + $pushRemoteNames | Select-Object -Unique
-    foreach ($remoteName in $allRemoteNames) {
-        $syncStates[$remoteName] = Get-BranchSyncState -RemoteName $remoteName -Branch $branch
-    }
-
-    $pullSyncState = $syncStates[$PullRemoteName]
+    $pullSyncState = Get-BranchSyncState -RemoteName $PullRemoteName -Branch $branch
     $needsPull = -not $SkipPull -and $pullSyncState.HasRemoteBranch -and $pullSyncState.Behind -gt 0
+    $pushSyncStates = @{}
+    foreach ($pushRemote in $pushRemotes) {
+        $pushSyncStates[$pushRemote.Name] = Get-BranchSyncState -RemoteName $pushRemote.Name -Branch $pushBranchName
+    }
     $pushTargets = if ($SkipPush) {
         @()
     }
     else {
         foreach ($pushRemote in $pushRemotes) {
-            $pushState = $syncStates[$pushRemote.Name]
+            $pushState = $pushSyncStates[$pushRemote.Name]
             if (-not $pushState.HasRemoteBranch -or $pushState.Ahead -gt 0) {
                 $pushRemote
             }
@@ -292,6 +298,7 @@ try {
 
     Write-Host "Repository : $repoRoot"
     Write-Host "Branch     : $branch"
+    Write-Host "Push branch: $pushBranchName"
     Write-Host "Pull remote: $($pullRemote.Name) -> $($pullRemote.Url)"
     if ($pullSyncState.HasRemoteBranch) {
         Write-Host "Pull state : ahead $($pullSyncState.Ahead), behind $($pullSyncState.Behind)"
@@ -301,12 +308,12 @@ try {
     }
     Write-Host "Push remotes:"
     foreach ($pushRemote in $pushRemotes) {
-        $pushState = $syncStates[$pushRemote.Name]
+        $pushState = $pushSyncStates[$pushRemote.Name]
         if ($pushState.HasRemoteBranch) {
-            Write-Host "  $($pushRemote.Name) -> $($pushRemote.Url) (ahead $($pushState.Ahead), behind $($pushState.Behind))"
+            Write-Host "  $($pushRemote.Name) -> $($pushRemote.Url) [$pushBranchName] (ahead $($pushState.Ahead), behind $($pushState.Behind))"
         }
         else {
-            Write-Host "  $($pushRemote.Name) -> $($pushRemote.Url) (branch missing)"
+            Write-Host "  $($pushRemote.Name) -> $($pushRemote.Url) [$pushBranchName] (branch missing)"
         }
     }
 
@@ -375,7 +382,12 @@ try {
 
     foreach ($pushRemote in $pushTargets) {
         try {
-            Invoke-Git -Arguments @("push", $pushRemote.Name, $branch) | Out-Null
+            if ($pushBranchName -eq $branch) {
+                Invoke-Git -Arguments @("push", $pushRemote.Name, $branch) | Out-Null
+            }
+            else {
+                Invoke-Git -Arguments @("push", $pushRemote.Name, "HEAD:refs/heads/$pushBranchName") | Out-Null
+            }
         }
         catch {
             if ($_.Exception.Message -match "permission denied|Authentication failed|403|401") {

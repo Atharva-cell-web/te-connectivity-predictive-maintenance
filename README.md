@@ -101,7 +101,9 @@ git autosync-dry
 git autosync-staged
 ```
 
-`git autosync` stages all files with `git add -A`, creates a timestamped commit if needed, pulls from `origin`, then pushes the current branch to both `origin` and `vishnu`.
+`git autosync` stages all files with `git add -A`, creates a timestamped commit if needed, pulls from `origin`, then pushes to both `origin` and `vishnu`.
+
+If your current branch is `main`, autosync will automatically push `HEAD` to `autosync-main` instead of trying to push directly to the protected `main` branch.
 
 You can also preview what will be committed without changing Git state:
 
