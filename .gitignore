@@ -1,40 +1,65 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.venv/
-venv/
-env/
-.env
-.venv_new/
-
-# Node
-node_modules/
-frontend/node_modules/
-dist/
-frontend/dist/
-
-# Logs and local tooling
-*.log
-.DS_Store
+# OS / IDE
 .idea/
 .vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
 
-# Big/raw datasets (keep repo lightweight)
-old data/
+# Python
+.venv/
+.venv_new/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Node / Frontend
+**/node_modules/
+**/dist/
+**/dist-ssr/
+
+# Env / logs
+.env
+.env.*
+!.env.example
+logs/
+*.log
+
+# Archives / exports
+*.zip
+*.7z
+*.rar
+
+# Large raw/training datasets (do not push)
 new data/
+old data/
 new_raw_data/
-new_processed_data/
+plots/
+_archive/
 processed/sensor/
+processed/mes/
+processed/safe/
+processed/phase2_summary.txt
 
-# Keep only inference-ready feature artifacts
-processed/*
-!processed/features/
+# Keep only runtime-ready feature artifacts
 processed/features/*
-!processed/features/rolling_features_demo.parquet
 !processed/features/rolling_feature_columns.txt
+!processed/features/rolling_features_demo.parquet
 
-# Keep only inference model artifact
+# Keep only runtime-ready machine test data
+new_processed_data/*
+!new_processed_data/FEB_TEST_RESULTS.parquet
+!new_processed_data/M*_TEST.parquet
+
+# Keep only model files needed to run API + dashboard
 models/*
+!models/lightgbm_scrap_model.pkl
+!models/model_features.pkl
 !models/lightgbm_scrap_risk_wide.pkl
+!models/sensor_forecaster_lagged.pkl
+!models/part_tool_encodings.json

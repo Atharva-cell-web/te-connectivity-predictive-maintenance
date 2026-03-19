@@ -1,4 +1,4 @@
-from config_limits import SAFE_LIMITS
+from backend.config_limits import SAFE_LIMITS
 
 def check_safety_limits(snapshot):
     """

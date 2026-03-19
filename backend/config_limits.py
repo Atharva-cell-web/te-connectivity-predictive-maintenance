@@ -2,8 +2,9 @@
 
 # ML thresholds (business-owned)
 ML_THRESHOLDS = {
-    "LOW": 0.30,
-    "MEDIUM": 0.60
+    'LOW': 0.32,
+    'MEDIUM': 0.55,
+    'HIGH': 0.79
 }
 
 # Hard safety limits (Calculated from 1st-99th Percentile of Jan-Feb 2026 Data)
@@ -77,6 +78,11 @@ SAFE_LIMITS = {
         "min": 0.0,
         "max": 1905.0,
         "unit": "bar"
+    },
+    "Extruder_torque": {
+        "min": -1.0,
+        "max": 1.0,
+        "unit": "Nm"
     }
 }
 

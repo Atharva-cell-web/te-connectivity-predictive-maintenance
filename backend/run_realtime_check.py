@@ -1,7 +1,7 @@
-from data_access import get_recent_window
-from config_limits import SAFE_LIMITS, ML_THRESHOLDS
-from feature_window import extract_ml_features
-from ml_inference import load_model, predict_risk
+from backend.data_access import get_recent_window
+from backend.config_limits import SAFE_LIMITS, ML_THRESHOLDS
+from backend.feature_window import extract_ml_features
+from backend.ml_inference import load_model, predict_risk
 
 _MODEL = None
 

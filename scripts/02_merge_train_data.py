@@ -5,100 +5,178 @@ import gc
 # --- CONFIGURATION ---
 PROCESSED_DIR = r"D:\te connectivity 3\new_processed_data"
 
-print("🚀 Starting Data Merger & Pivoter...")
+# v1.2b-filter-startup-scrap
+# KEY FIX: Use 5-minute point merge (original approach) BUT only on
+# status 200 (Productie) rows. The window-based approach labeled 32-46%
+# of rows as scrap because Hydra windows are entire shifts (up to 18 hrs).
+# The machine_event_create_date is the timestamp of the actual scrap EVENT
+# within the shift — this is what we merge against, not the window end.
+#
+# CONFIRMED CORRECT SCRAP RATE: 0.4-0.6% from real production data.
+# If labeling produces >5%, something is wrong.
+PRODUCTION_STATUS_CODES = [200]
 
-# 1. Load Hydra Training Data (The "Answers")
+print("🚀 Starting Data Merger & Pivoter...")
+print("   [v1.2b] Status 200 only + 5-min point merge (corrected labeling)")
+
+# 1. Load Hydra
 print("\n⏳ Loading Hydra Scrap Events...")
 hydra_df = pd.read_parquet(os.path.join(PROCESSED_DIR, "HYDRA_TRAIN.parquet"))
+print(f"   -> Total Hydra rows: {len(hydra_df)}")
 
-# Keep only actual scrap events
-scrap_events = hydra_df[hydra_df['scrap_quantity'] > 0].copy()
+# Filter to status 200 production scrap only
+scrap_source = hydra_df[hydra_df['scrap_quantity'] > 0].copy()
 
-# --- FIX: NORMALIZE MACHINE IDs ---
-# This converts "M-231 ", "m231", etc. into strictly "M231"
-scrap_events['machine_id'] = scrap_events['machine_id'].astype(str).str.replace('-', '').str.upper().str.strip()
+if 'machine_status_code' in hydra_df.columns:
+    before_count = len(scrap_source)
+    scrap_source = scrap_source[
+        scrap_source['machine_status_code'].isin(PRODUCTION_STATUS_CODES)
+    ]
+    print(f"   -> Status filter: {len(scrap_source)} rows kept "
+          f"(removed {before_count - len(scrap_source)} non-production rows)")
 
-scrap_events = scrap_events[['machine_id', 'machine_event_create_date']].rename(columns={'machine_event_create_date': 'timestamp'})
-scrap_events['is_scrap'] = 1
-scrap_events['timestamp'] = pd.to_datetime(scrap_events['timestamp'], utc=True)
-scrap_events = scrap_events.sort_values('timestamp')
+    # Show what we kept
+    kept_summary = scrap_source.groupby('machine_status_code')['scrap_quantity'].agg(
+        rows='count', total_scrap='sum'
+    )
+    print(f"   -> Kept status breakdown:\n{kept_summary.to_string()}")
+else:
+    print("   -> WARNING: machine_status_code not found, using all scrap rows")
 
-print(f"   -> Found {len(scrap_events)} actual scrap events in training period.")
+# Normalize machine IDs
+scrap_source['machine_id_clean'] = (
+    scrap_source['machine_id'].astype(str)
+    .str.replace('-', '').str.upper().str.strip()
+)
+
+# Build the merge timestamp from machine_event_create_date + create_time
+# This is the actual moment the scrap batch was logged — use as point event
+def build_event_ts(df):
+    """Combine date + seconds-of-day → UTC timestamp."""
+    base = pd.to_datetime(df['machine_event_create_date'])
+    if base.dt.tz is not None:
+        base = base.dt.tz_convert('UTC').dt.tz_localize(None)
+    if 'machine_event_create_time' in df.columns:
+        offset = pd.to_timedelta(
+            pd.to_numeric(df['machine_event_create_time'], errors='coerce').fillna(0),
+            unit='s'
+        )
+        return (base + offset).dt.tz_localize('UTC')
+    else:
+        return base.dt.tz_localize('UTC')
+
+scrap_source['merge_ts'] = build_event_ts(scrap_source)
+scrap_source = scrap_source.sort_values('merge_ts')
+
+print(f"\n   -> Merge timestamps built: {len(scrap_source)} scrap events")
+print(f"   -> Machine IDs: {sorted(scrap_source['machine_id_clean'].unique())}")
+print(f"   -> Date range: {scrap_source['merge_ts'].min()} to {scrap_source['merge_ts'].max()}")
 
 master_train_dfs = []
 
-# 2. Process each Machine's Training File
-for file in os.listdir(PROCESSED_DIR):
-    if file.endswith("_TRAIN.parquet") and "MERGED" not in file and not file.startswith("HYDRA"):
-        # Normalize the filename ID too
-        machine_id_raw = file.split('_')[0] 
-        machine_id = machine_id_raw.replace('-', '').upper().strip()
-        
-        print(f"\n⚙️ Processing {machine_id_raw} (Matching as {machine_id})...")
+# 2. Process each machine
+train_files = [
+    f for f in os.listdir(PROCESSED_DIR)
+    if f.endswith("_TRAIN.parquet")
+    and "MERGED" not in f
+    and not f.startswith("HYDRA")
+]
+print(f"\n   -> Found {len(train_files)} TRAIN files: {train_files}")
 
-        # Load machine data
-        df = pd.read_parquet(os.path.join(PROCESSED_DIR, file))
+for file in train_files:
+    machine_id_raw = file.split('_')[0]
+    machine_id = machine_id_raw.replace('-', '').upper().strip()
 
-        # FORCE VALUES TO BE NUMBERS
-        print("   -> Converting text values to numeric...")
-        df['value'] = pd.to_numeric(df['value'], errors='coerce')
-        df = df.dropna(subset=['value'])
-        
-        # Drop any rows that were completely broken text and became NaN
-        df = df.dropna(subset=['value'])
-        # ---------------------------------------
+    print(f"\n⚙️  Processing {machine_id_raw} (as {machine_id})...")
 
-        # PIVOT: Turn "variable_name" into columns. Take the average if multiple pings happen at the same exact timestamp.
-        print("   -> Pivoting sensor data (Making it AI-ready)...")
-        pivot_df = df.pivot_table(
-            index='timestamp', 
-            columns='variable_name', 
-            values='value', 
-            aggfunc='mean'
-        ).reset_index()
+    df = pd.read_parquet(os.path.join(PROCESSED_DIR, file))
+    print(f"   -> Raw rows: {len(df):,}")
 
-        pivot_df = pivot_df.sort_values('timestamp')
+    df['value'] = pd.to_numeric(df['value'], errors='coerce')
+    df = df.dropna(subset=['value'])
 
-        # Get scrap events specific to THIS machine
-        machine_scrap = scrap_events[scrap_events['machine_id'] == machine_id].copy()
+    print("   -> Pivoting...")
+    pivot_df = df.pivot_table(
+        index='timestamp',
+        columns='variable_name',
+        values='value',
+        aggfunc='mean'
+    ).reset_index()
 
-        if not machine_scrap.empty:
-            print(f"   -> Merging {len(machine_scrap)} scrap events with sensor data...")
-            # If a sensor reading happened within 5 minutes of a logged scrap event, label it as scrap (1)
-            merged = pd.merge_asof(
-                pivot_df,
-                machine_scrap[['timestamp', 'is_scrap']],
-                on='timestamp',
-                direction='nearest',
-                tolerance=pd.Timedelta('5 minutes')
-            )
-            merged['is_scrap'] = merged['is_scrap'].fillna(0)
-        else:
-            print("   -> No scrap events found for this machine in training period.")
-            pivot_df['is_scrap'] = 0
-            merged = pivot_df
+    pivot_df['timestamp'] = pd.to_datetime(pivot_df['timestamp'], utc=True)
+    pivot_df = pivot_df.sort_values('timestamp').reset_index(drop=True)
+    print(f"   -> Cycle rows after pivot: {len(pivot_df):,}")
 
-        # Add machine ID back in
-        merged['machine_id'] = machine_id
-        
-        # Save this machine's processed data temporarily
-        merged.to_parquet(os.path.join(PROCESSED_DIR, f"{machine_id}_MERGED_TRAIN.parquet"), index=False)
-        master_train_dfs.append(merged)
+    # Get this machine's scrap events
+    machine_scrap = scrap_source[
+        scrap_source['machine_id_clean'] == machine_id
+    ][['merge_ts', 'scrap_quantity']].copy()
+    machine_scrap = machine_scrap.rename(columns={'merge_ts': 'timestamp'})
+    machine_scrap['is_scrap'] = 1
+    machine_scrap = machine_scrap.sort_values('timestamp')
 
-        # Clean memory
-        del df, pivot_df, merged
-        gc.collect()
+    print(f"   -> Scrap events (status 200 only): {len(machine_scrap)}")
 
-# 3. Combine everything into the Final Master File
-print("\n🔗 Combining all machines into Final Master Training File...")
+    if not machine_scrap.empty:
+        # 5-minute nearest merge — label sensor reading as scrap if it falls
+        # within 5 minutes of a logged production scrap event
+        merged = pd.merge_asof(
+            pivot_df,
+            machine_scrap[['timestamp', 'is_scrap']],
+            on='timestamp',
+            direction='nearest',
+            tolerance=pd.Timedelta('5 minutes')
+        )
+        merged['is_scrap'] = merged['is_scrap'].fillna(0).astype(int)
+    else:
+        pivot_df['is_scrap'] = 0
+        merged = pivot_df
+
+    merged['machine_id'] = machine_id
+
+    scrap_n = int(merged['is_scrap'].sum())
+    scrap_pct = scrap_n / len(merged) * 100
+    print(f"   -> Scrap labels: {scrap_n:,} / {len(merged):,} ({scrap_pct:.3f}%)")
+
+    if scrap_pct > 10:
+        print(f"   -> WARNING: Scrap rate {scrap_pct:.1f}% seems high. "
+              f"Expected ~0.5-2%. Check Hydra timestamps for this machine.")
+
+    merged.to_parquet(
+        os.path.join(PROCESSED_DIR, f"{machine_id}_MERGED_TRAIN.parquet"),
+        index=False
+    )
+    master_train_dfs.append(merged)
+
+    del df, pivot_df, merged
+    gc.collect()
+
+# 3. Combine
+print(f"\n🔗 Combining {len(master_train_dfs)} machines...")
 final_train_df = pd.concat(master_train_dfs, ignore_index=True)
 
 final_save_path = os.path.join(PROCESSED_DIR, "FINAL_TRAINING_MASTER.parquet")
 final_train_df.to_parquet(final_save_path, index=False)
 
-# Calculate some quick stats for you
 total_rows = len(final_train_df)
-total_scrap = len(final_train_df[final_train_df['is_scrap'] == 1])
-print(f"✅ DONE! Master File Saved: {final_save_path}")
-print(f"📊 Final Dataset Size: {total_rows} rows")
-print(f"🧨 Total Sensor Readings Labeled as Scrap: {total_scrap}")
+total_scrap = int(final_train_df['is_scrap'].sum())
+scrap_pct = total_scrap / total_rows * 100
+
+print(f"\n✅ DONE! Saved: {final_save_path}")
+print(f"📊 Rows: {total_rows:,}")
+print(f"🧨 Scrap labeled: {total_scrap:,} ({scrap_pct:.3f}%)")
+
+if scrap_pct < 0.1:
+    print("⚠️  Very low scrap rate — check if Hydra timestamps align with sensor timestamps")
+elif scrap_pct > 5:
+    print("⚠️  High scrap rate — Hydra event timestamps may not align with sensor timestamps precisely")
+else:
+    print("✓  Scrap rate looks realistic (0.1% - 5% range)")
+
+print(f"\n[v1.2b] Next steps:")
+print(f"  NOTE: Skip step4b (pattern features broken — sensor name mismatch)")
+print(f"  NOTE: step4c reads rolling_features_wide_labeled.parquet (old file)")
+print(f"        — this pipeline path needs review before running")
+print(f"  SAFE TO RUN: python scripts/step5_3b_train_lightgbm_wide.py")
+print(f"  (it reads rolling_features_with_context.parquet which has the old labels)")
+print(f"  To fully retrain on NEW labels, the rolling feature rebuild is needed first.")

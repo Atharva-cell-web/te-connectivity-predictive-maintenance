@@ -10,41 +10,33 @@ import numpy as np
 import pandas as pd
 from pandas.errors import PerformanceWarning
 
-# Silence pandas fragmentation warnings and sklearn feature-name warnings
 warnings.filterwarnings("ignore", category=PerformanceWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
-from config_limits import ML_THRESHOLDS
-from dynamic_limits import calculate_dynamic_limits
+from backend.config_limits import ML_THRESHOLDS
+from backend.dynamic_limits import calculate_dynamic_limits
 
-# Robust project root detection
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WIDE_FILE = PROJECT_ROOT / "processed" / "features" / "rolling_features_demo.parquet"
 WIDE_FILE_FALLBACK = PROJECT_ROOT / "processed" / "features" / "rolling_features_wide.parquet"
 FEB_RESULTS_FILE = PROJECT_ROOT / "new_processed_data" / "FEB_TEST_RESULTS.parquet"
 MACHINE_TESTS_DIR = PROJECT_ROOT / "new_processed_data"
-CONTROL_MODEL_PATH = PROJECT_ROOT / "models" / "lightgbm_scrap_risk_wide.pkl"
+CONTROL_MODEL_PATH = PROJECT_ROOT / "models/lightgbm_scrap_model.pkl"
 MODEL_FEATURES_PATH = PROJECT_ROOT / "processed" / "features" / "rolling_feature_columns.txt"
 FORECASTER_MODEL_PATH = PROJECT_ROOT / "models" / "sensor_forecaster_lagged.pkl"
 FUTURE_RISK_THRESHOLD = float(ML_THRESHOLDS.get("MEDIUM", 0.60))
 
-
-
-# --------------- TTL Cache Infrastructure ---------------
-_ttl_cache: dict = {}   # key -> (expiry_timestamp, result)
+_ttl_cache: dict = {}
 _TTL_SECONDS = 15
 
 def _get_cached(key):
-    """Return cached result if still fresh, else None."""
     entry = _ttl_cache.get(key)
     if entry and time.monotonic() < entry[0]:
         return entry[1]
     return None
 
 def _set_cached(key, value):
-    """Store a result with a 15-second TTL."""
     _ttl_cache[key] = (time.monotonic() + _TTL_SECONDS, value)
-
 
 def _normalize_machine_id(machine_id: str) -> str:
     compact = re.sub(r"[^A-Za-z0-9]", "", str(machine_id or "")).upper()
@@ -52,13 +44,11 @@ def _normalize_machine_id(machine_id: str) -> str:
         return compact
     return f"M{compact}"
 
-
 def _display_machine_id(machine_norm: str) -> str:
     match = re.match(r"^M(\d+)$", machine_norm)
     if match:
         return f"M-{match.group(1)}"
     return machine_norm
-
 
 def _safe_float(value):
     if pd.isna(value):
@@ -67,7 +57,6 @@ def _safe_float(value):
         return float(value)
     except (TypeError, ValueError):
         return None
-
 
 def _downsample(df: pd.DataFrame, max_points: int = 360) -> pd.DataFrame:
     if len(df) <= max_points:
@@ -78,7 +67,6 @@ def _downsample(df: pd.DataFrame, max_points: int = 360) -> pd.DataFrame:
         sampled = pd.concat([sampled, df.tail(1)], ignore_index=True)
     return sampled.drop_duplicates(subset=["timestamp"], keep="last")
 
-
 def _clean_limit_payload(current_safe_limits: dict):
     cleaned = {}
     for sensor, limits in current_safe_limits.items():
@@ -88,7 +76,6 @@ def _clean_limit_payload(current_safe_limits: dict):
         }
     return cleaned
 
-
 @lru_cache(maxsize=1)
 def _load_control_model_and_features():
     if not CONTROL_MODEL_PATH.exists():
@@ -96,19 +83,16 @@ def _load_control_model_and_features():
 
     model = joblib.load(CONTROL_MODEL_PATH)
     
-    if hasattr(model, "feature_name_"):
+    if hasattr(model, "feature_name"):
+        features = model.feature_name() if callable(model.feature_name) else model.feature_name
+    elif hasattr(model, "feature_name_"):
         features = model.feature_name_
     elif hasattr(model, "booster_"):
         features = model.booster_.feature_name()
     else:
         with open(MODEL_FEATURES_PATH, "r") as f:
-            features = [
-                line.strip() for line in f.readlines() 
-                if line.strip() and line.strip() not in ["machine_id_normalized", "event_timestamp", "timestamp", "machine_id", "is_scrap"]
-            ]
-            
+            features = [line.strip() for line in f.readlines() if line.strip() and line.strip() not in ["machine_id_normalized", "event_timestamp", "timestamp", "machine_id", "is_scrap"]]
     return model, tuple(features)
-
 
 @lru_cache(maxsize=1)
 def _load_sensor_forecaster():
@@ -123,13 +107,11 @@ def _load_sensor_forecaster():
         list(artifact.get("hydra_features", []))
     )
 
-
 @lru_cache(maxsize=1)
 def _load_feb_results():
     if not FEB_RESULTS_FILE.exists():
         raise FileNotFoundError(f"FEB results file not found: {FEB_RESULTS_FILE}")
 
-    # Column-filtered load: only the columns we actually need
     _feb_cols = [
         "timestamp", "Injection_pressure", "Cycle_time",
         "scrap_probability", "is_scrap_actual",
@@ -137,7 +119,6 @@ def _load_feb_results():
     try:
         feb = pd.read_parquet(FEB_RESULTS_FILE, columns=_feb_cols, engine="pyarrow")
     except Exception:
-        # Fallback: load all columns if filtering fails (schema drift)
         feb = pd.read_parquet(FEB_RESULTS_FILE, engine="pyarrow")
 
     if "timestamp" not in feb.columns:
@@ -151,7 +132,6 @@ def _load_feb_results():
             feb[key_col] = pd.to_numeric(feb[key_col], errors="coerce").round(4)
 
     return feb
-
 
 @lru_cache(maxsize=16)
 def _load_machine_pivot(machine_norm: str):
@@ -170,12 +150,7 @@ def _load_machine_pivot(machine_norm: str):
     raw["timestamp"] = pd.to_datetime(raw["timestamp"], utc=True, errors="coerce")
     raw = raw.dropna(subset=["timestamp"])
 
-    pivot = raw.pivot_table(
-        index="timestamp",
-        columns="variable_name",
-        values="value",
-        aggfunc="mean",
-    ).reset_index()
+    pivot = raw.pivot_table(index="timestamp", columns="variable_name", values="value", aggfunc="mean").reset_index()
     pivot = pivot.sort_values("timestamp").reset_index(drop=True)
 
     _, model_features = _load_control_model_and_features()
@@ -189,9 +164,7 @@ def _load_machine_pivot(machine_norm: str):
 
     return pivot, machine_definition
 
-
 def _build_machine_feb_history(machine_norm: str):
-    """Build machine history with 15-second TTL cache."""
     cache_key = ("feb_history", machine_norm)
     cached = _get_cached(cache_key)
     if cached is not None:
@@ -205,7 +178,6 @@ def _build_machine_feb_history(machine_norm: str):
         raise ValueError(f"Cannot map machine rows to FEB results. Missing join columns: {missing_join}")
 
     feb_unique = feb.drop_duplicates(subset=join_cols, keep="first")
-    # Merge using the FULL pivot so that all sensor columns are carried through
     history = pivot.merge(feb_unique, on=join_cols, how="left")
 
     if history.empty:
@@ -219,25 +191,13 @@ def _build_machine_feb_history(machine_norm: str):
         history["is_scrap_actual"] = 0
     history["is_scrap_actual"] = pd.to_numeric(history["is_scrap_actual"], errors="coerce").fillna(0)
 
-    missing_prob_mask = history["scrap_probability"].isna()
-    if missing_prob_mask.any():
-        model, model_features = _load_control_model_and_features()
-        feature_frame = history.loc[missing_prob_mask].copy()
-        for feature in model_features:
-            if feature not in feature_frame.columns:
-                feature_frame[feature] = 0.0
-        X_missing = feature_frame[list(model_features)].fillna(0.0)
-        if hasattr(model, "predict_proba"):
-            missing_probs = model.predict_proba(X_missing)[:, 1]
-        else:
-            missing_probs = model.predict(X_missing)
-        history.loc[missing_prob_mask, "scrap_probability"] = missing_probs
+    # Rows that didn't match FEB results have NaN scrap_probability.
+    # Fill with 0.0 — do NOT re-score with the model at runtime, as the
+    # model expects rolling-feature inputs, not raw sensor columns.
+    history["scrap_probability"] = history["scrap_probability"].fillna(0.0)
 
     history["scrap_probability"] = history["scrap_probability"].fillna(0.0).clip(0, 1)
 
-    # --- IDLE MACHINE FILTER: Override reality ---
-    # If the cycle time is excessively low (<0.5s), the machine is essentially idle/offline. 
-    # It cannot produce parts, therefore it cannot produce scrap. 
     if "Cycle_time" in history.columns:
         idle_mask = history["Cycle_time"].fillna(0) < 0.5
         history.loc[idle_mask, "scrap_probability"] = 0.0
@@ -259,7 +219,6 @@ def _build_machine_feb_history(machine_norm: str):
     _set_cached(cache_key, result)
     return result
 
-
 def _compute_root_causes(current_sensors: dict, current_safe_limits: dict):
     exceeded = []
     nearby = []
@@ -280,10 +239,14 @@ def _compute_root_causes(current_sensors: dict, current_safe_limits: dict):
         span = max(max(span_candidates) if span_candidates else 1.0, 1.0)
 
         if upper is not None and sensor_value > upper:
-            exceeded.append((sensor, (sensor_value - upper) / span))
+            breach_magnitude = (sensor_value - upper) / span
+            if breach_magnitude >= 0.01:
+                exceeded.append((sensor, breach_magnitude))
             continue
         if lower is not None and sensor_value < lower:
-            exceeded.append((sensor, (lower - sensor_value) / span))
+            breach_magnitude = (lower - sensor_value) / span
+            if breach_magnitude >= 0.01:
+                exceeded.append((sensor, breach_magnitude))
             continue
 
         distances = []
@@ -302,7 +265,6 @@ def _compute_root_causes(current_sensors: dict, current_safe_limits: dict):
     nearby_sorted = sorted(nearby, key=lambda item: item[1], reverse=True)
     return [sensor for sensor, _ in nearby_sorted[:3]], []
 
-
 def _infer_step_seconds(history: pd.DataFrame) -> int:
     if len(history) < 2:
         return 60
@@ -313,7 +275,6 @@ def _infer_step_seconds(history: pd.DataFrame) -> int:
     if not np.isfinite(median_step) or median_step <= 0:
         return 60
     return int(np.clip(round(median_step), 10, 120))
-
 
 def _generate_future_horizon(past_window: pd.DataFrame, future_minutes: int, current_safe_limits: dict = None):
     model, model_features = _load_control_model_and_features()
@@ -329,8 +290,8 @@ def _generate_future_horizon(past_window: pd.DataFrame, future_minutes: int, cur
             recent[feature] = 0.0
         recent[feature] = pd.to_numeric(recent[feature], errors="coerce").ffill().fillna(0.0)
 
-    step_seconds = 60  # 1-minute resolution (temporal downsampling)
-    steps = max(6, future_minutes)  # e.g. 35 min → 35 steps
+    step_seconds = 60
+    steps = max(6, future_minutes)
     last_ts = recent["timestamp"].iloc[-1]
     
     future_timestamps = [last_ts + pd.Timedelta(minutes=i) for i in range(1, steps + 1)]
@@ -352,32 +313,25 @@ def _generate_future_horizon(past_window: pd.DataFrame, future_minutes: int, cur
             else:
                 history_df = recent.tail(history_needed).copy()
                 
-            # Bring any available hydra features into the recent window if they aren't there explicitly
             for h in hydra_features:
                 if h not in history_df.columns:
                     history_df[h] = 0.0
                 
-            # Validate sensor columns are present in the data
             missing_sensors = [s for s in raw_sensors if s not in recent.columns]
             if missing_sensors:
-                print(f"[DEBUG] Forecaster sensors MISSING from past_window: {missing_sensors}")
-                print(f"[DEBUG] Available columns: {sorted(recent.columns.tolist())}")
                 raise KeyError(f"Forecaster sensors missing: {missing_sensors}")
 
             t_forecast = time.perf_counter()
-            # Capture the last hydra feature values so we can carry them forward
             last_hydra = {h: history_df[h].iloc[-1] for h in hydra_features}
 
             state_buffer = history_df[raw_sensors].to_dict('records')
             future_raw_predictions = []
 
-            # Pre-allocate numpy array for prediction input (avoids DataFrame overhead)
             n_features = len(input_features)
             X_step_arr = np.zeros((1, n_features))
             
             for _ in range(steps):
                 current_input = {}
-                # Add constant hydra context
                 current_input.update(last_hydra)
 
                 for s in raw_sensors:
@@ -387,7 +341,6 @@ def _generate_future_horizon(past_window: pd.DataFrame, future_minutes: int, cur
                     for s in raw_sensors:
                         current_input[f"{s}_lag_{lag}"] = state_buffer[lag_idx].get(s, 0.0)
                         
-                # Fill pre-allocated array (fast, no object creation)
                 for fi, f in enumerate(input_features):
                     X_step_arr[0, fi] = current_input.get(f, 0.0)
                 pred_raw = forecaster.predict(X_step_arr)[0]
@@ -396,7 +349,6 @@ def _generate_future_horizon(past_window: pd.DataFrame, future_minutes: int, cur
                 for i, sensor in enumerate(raw_sensors):
                     final_val = float(pred_raw[i])
                     
-                    # Clamp within context-aware safe limits
                     if current_safe_limits and sensor in current_safe_limits:
                         if "min" in current_safe_limits[sensor]:
                             final_val = max(final_val, _safe_float(current_safe_limits[sensor]["min"]) or final_val)
@@ -412,34 +364,31 @@ def _generate_future_horizon(past_window: pd.DataFrame, future_minutes: int, cur
             pred_df = pd.DataFrame(future_raw_predictions)
             for col in raw_sensors:
                 future[col] = pred_df[col]
-            print(f"[HEARTBEAT]   forecast_loop ({steps} steps): {time.perf_counter() - t_forecast:.3f}s")
         else:
             raise ValueError("Lagged forecaster model missing.")
             
     except Exception as e:
-        print(f"Warning: Lagged forecaster bypassed ({e}). Falling back to EMA.")
-        # EMA fallback: smoothly decay from last known value instead of a flat line
-        ema_alpha = 0.05  # Small alpha = slow decay, keeps line close to last known
-        fallback_keys = current_safe_limits.keys() if current_safe_limits else recent.select_dtypes(include=[np.number]).columns
-        for col in fallback_keys:
+        print(f"Warning: Lagged forecaster bypassed ({e}). Falling back to flat carry-forward.")
+        # alpha=0.0 → pure carry-forward of last known value (no drift toward mean)
+        for col in (current_safe_limits.keys() if current_safe_limits else recent.select_dtypes(include=[np.number]).columns):
             if col in recent.columns:
                 last_val = float(recent.iloc[-1][col])
-                col_mean = float(recent[col].mean())
-                ema_values = []
-                current_ema = last_val
-                for _ in range(len(future)):
-                    current_ema = ema_alpha * col_mean + (1 - ema_alpha) * current_ema
-                    ema_values.append(round(current_ema, 6))
-                future[col] = ema_values
+                future[col] = last_val
+
+    # ── Sanity-clamp all future sensor values to catch garbage predictions ──
+    sensor_clamp_cols = [c for c in future.columns if c not in ["timestamp", "scrap_probability", "is_scrap_actual", "predicted_scrap"]]
+    for col in sensor_clamp_cols:
+        if col in future.columns and col in recent.columns:
+            last_val = float(recent.iloc[-1][col])
+            future[col] = future[col].apply(
+                lambda v, lv=last_val: lv if (not np.isfinite(v) or abs(v) > 1e6) else v
+            )
 
     last_known_features = recent.iloc[-1]
     for feature in model_features:
         if feature not in future.columns:
             future[feature] = last_known_features.get(feature, 0.0)
 
-    # ── Carry forward ALL safe_limits sensors into future (not just model features) ──
-    # Without this, sensors the forecaster doesn't predict (e.g. Ejector_fix_deviation_torque)
-    # are absent from future timeline points → charts for those sensors appear blank.
     if current_safe_limits:
         for sensor in current_safe_limits:
             if sensor not in future.columns:
@@ -447,6 +396,8 @@ def _generate_future_horizon(past_window: pd.DataFrame, future_minutes: int, cur
                 future[sensor] = float(last_val)
 
     safe_features = [f for f in model_features if f in future.columns and f not in ["timestamp", "machine_id", "machine_id_normalized", "event_timestamp", "is_scrap"]]
+    
+    # V1 Prediction Logic for future
     X_future = future[safe_features].fillna(0.0)
     
     if hasattr(model, "predict_proba"):
@@ -456,7 +407,6 @@ def _generate_future_horizon(past_window: pd.DataFrame, future_minutes: int, cur
 
     future["scrap_probability"] = pd.Series(risk_values).clip(0, 1)
 
-    # --- IDLE MACHINE FILTER (FUTURE) ---
     if "Cycle_time" in future.columns:
         future_idle_mask = future["Cycle_time"].fillna(0) < 0.5
         future.loc[future_idle_mask, "scrap_probability"] = 0.0
@@ -466,16 +416,18 @@ def _generate_future_horizon(past_window: pd.DataFrame, future_minutes: int, cur
     
     return future
 
-
 def _row_to_timeline_point(row, is_future: bool, current_safe_limits: dict = None):
     sensors = {}
     sensor_keys = current_safe_limits.keys() if current_safe_limits else []
     for sensor in sensor_keys:
         if sensor in row and pd.notna(row[sensor]):
-            sensors[sensor] = round(float(row[sensor]), 2)
+            val = float(row[sensor])
+            # Skip garbage values — all legitimate sensors are below ~1500
+            if not np.isfinite(val) or abs(val) > 5000:
+                continue
+            sensors[sensor] = round(val, 2)
 
     ts = pd.to_datetime(row["timestamp"])
-    # Strip any residual tz-info so strftime never shifts the clock value
     if hasattr(ts, "tz") and ts.tz is not None:
         ts = ts.tz_localize(None)
     return {
@@ -486,48 +438,31 @@ def _row_to_timeline_point(row, is_future: bool, current_safe_limits: dict = Non
         "sensors": sensors,
     }
 
-
 def build_control_room_payload(machine_id: str, time_window: int = 240, future_window: int = 35):
-    # Check payload-level TTL cache first
     payload_key = ("payload", machine_id, time_window, future_window)
     cached_payload = _get_cached(payload_key)
     if cached_payload is not None:
-        print(f"[CACHE HIT] Returning saved payload for {machine_id} (0.00s)", flush=True)
         return cached_payload
 
     t0 = time.perf_counter()
-    print(f"[CACHE MISS] Fetching fresh data from Parquet for {machine_id}...", flush=True)
-
     machine_norm = _normalize_machine_id(machine_id)
 
-    t_io = time.perf_counter()
     history, machine_info = _build_machine_feb_history(machine_norm)
-    print(f"[HEARTBEAT]   _build_machine_feb_history: {time.perf_counter() - t_io:.3f}s", flush=True)
 
     if history.empty:
         raise ValueError(f"No history found for machine {machine_id}")
 
     history = history.sort_values("timestamp").reset_index(drop=True)
-
-    # ── Ensure timestamps are clean datetime ──
     history["timestamp"] = pd.to_datetime(history["timestamp"], errors="coerce")
 
-    # ── AUTO-STEP-BACK LIVE MODE ──
-    # Find the absolute end of the file and step back 1 hour
-    # so the final hour of data can be cross-checked against the forecast
     max_time = history["timestamp"].max()
     anchor = max_time - pd.Timedelta(hours=1)
-
-    # Cutoff uses the time_window (e.g., 120 min = 2 hours before anchor)
     cutoff = anchor - pd.Timedelta(minutes=time_window)
 
     past_window = history[
         (history["timestamp"] >= cutoff) & (history["timestamp"] <= anchor)
     ].copy()
-    print(f"[HEARTBEAT]   max_time={max_time}  anchor={anchor}  cutoff={cutoff}  past_rows={len(past_window)}", flush=True)
-    # --- SAFETY NET FOR EMPTY DATA ---
     if past_window.empty:
-        print(f"[WARNING] No data found for {machine_id} window. Returning OFFLINE fallback.", flush=True)
         return {
             "machine_info": {"id": machine_id, "tool_id": "UNKNOWN", "part_number": "UNKNOWN"},
             "summary_stats": {"past_scrap_detected": 0, "future_scrap_predicted": 0},
@@ -535,18 +470,12 @@ def build_control_room_payload(machine_id: str, time_window: int = 240, future_w
             "timeline": [],
             "safe_limits": {}
         }
-    if past_window.empty:
-        past_window = history[history["timestamp"] <= anchor].tail(1).copy()
 
-    # ── Forward-fill sensor data to handle sparse machines (M-612, M-607 etc.) ──
     numeric_cols = past_window.select_dtypes(include=[np.number]).columns.tolist()
     if numeric_cols:
         past_window[numeric_cols] = past_window[numeric_cols].ffill().bfill()
 
-    # --- Dynamic Setpoint Engine: compute limits from recent data ---
-    t_limits = time.perf_counter()
     current_safe_limits = calculate_dynamic_limits(past_window)
-    print(f"[HEARTBEAT]   calculate_dynamic_limits: {time.perf_counter() - t_limits:.3f}s", flush=True)
 
     current_row = past_window.iloc[-1]
     current_sensors = {}
@@ -556,7 +485,7 @@ def build_control_room_payload(machine_id: str, time_window: int = 240, future_w
 
     root_causes, breached_sensors = _compute_root_causes(current_sensors, current_safe_limits)
     base_risk = float(current_row.get("scrap_probability", 0.0) or 0.0)
-    risk_penalty = min(0.35, 0.12 * len(breached_sensors))
+    risk_penalty = min(0.25, 0.06 * len(breached_sensors))
     current_risk = min(1.0, base_risk + risk_penalty)
 
     if breached_sensors or current_risk >= float(ML_THRESHOLDS.get("MEDIUM", 0.60)):
@@ -566,8 +495,8 @@ def build_control_room_payload(machine_id: str, time_window: int = 240, future_w
     else:
         status = "LOW"
 
-    future_minutes = max(5, min(60, future_window))  # clamp to [5, 60]
-    future_horizon = _generate_future_horizon(past_window, future_minutes=future_minutes, current_safe_limits=current_safe_limits)
+    future_minutes = max(5, min(60, future_window))
+    future_horizon = _generate_future_horizon(past_window, future_minutes=future_minutes)
 
     past_scrap_detected = int((past_window["is_scrap_actual"].fillna(0) >= 1).sum())
     future_scrap_predicted = int((future_horizon["scrap_probability"] >= FUTURE_RISK_THRESHOLD).sum())
@@ -578,8 +507,49 @@ def build_control_room_payload(machine_id: str, time_window: int = 240, future_w
     timeline = []
     for _, row in past_timeline.iterrows():
         timeline.append(_row_to_timeline_point(row, is_future=False, current_safe_limits=current_safe_limits))
+
+    # ── Append live-streamed sensor data (if available) ──────────
+    try:
+        from backend.live_predictor import live_buffer
+        # Try both raw machine_id and normalised form
+        live_sensors = live_buffer.get(machine_id) or live_buffer.get(machine_norm) or live_buffer.get(_display_machine_id(machine_norm))
+        if live_sensors:
+            from datetime import datetime as _dt
+            model, model_features = _load_control_model_and_features()
+            live_row = {f: 0.0 for f in model_features}
+            for sensor_name, sensor_val in live_sensors.items():
+                if sensor_name in live_row:
+                    live_row[sensor_name] = float(sensor_val)
+            X_live = pd.DataFrame([live_row])[list(model_features)].fillna(0.0)
+            if hasattr(model, "predict_proba"):
+                live_risk = float(model.predict_proba(X_live)[:, 1][0])
+            else:
+                live_risk = float(model.predict(X_live)[0])
+
+            live_sensor_dict = {}
+            for sensor in current_safe_limits:
+                if sensor in live_sensors:
+                    live_sensor_dict[sensor] = round(float(live_sensors[sensor]), 2)
+
+            timeline.append({
+                "timestamp": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "risk_score": round(min(1.0, max(0.0, live_risk)), 2),
+                "is_future": False,
+                "is_scrap_actual": 0,
+                "sensors": live_sensor_dict,
+            })
+    except ImportError:
+        pass  # live_predictor not loaded yet — skip gracefully
+
     for _, row in future_timeline.iterrows():
         timeline.append(_row_to_timeline_point(row, is_future=True, current_safe_limits=current_safe_limits))
+
+    # ── Final sanitization: strip any garbage sensor values ────────
+    for point in timeline:
+        bad_keys = [k for k, v in point.get("sensors", {}).items()
+                    if not isinstance(v, (int, float)) or not np.isfinite(v) or abs(v) > 5000]
+        for k in bad_keys:
+            del point["sensors"][k]
 
     payload = {
         "machine_info": machine_info,
@@ -595,16 +565,10 @@ def build_control_room_payload(machine_id: str, time_window: int = 240, future_w
         "timeline": timeline,
         "safe_limits": _clean_limit_payload(current_safe_limits),
     }
-    print(f"[HEARTBEAT] build_control_room_payload END   | total: {time.perf_counter() - t0:.3f}s", flush=True)
     _set_cached(payload_key, payload)
     return payload
 
-
 def get_recent_window(machine_id, minutes=60):
-    """
-    Synchronized fetch: Pulls the recent window from the same February history 
-    timeline as build_control_room_payload, ensuring Section A and Section B match.
-    """
     machine_norm = _normalize_machine_id(machine_id)
     history, _ = _build_machine_feb_history(machine_norm)
     
@@ -627,7 +591,6 @@ def get_recent_window(machine_id, minutes=60):
         (history["timestamp"] >= cutoff) & (history["timestamp"] <= anchor)
     ].copy()
 
-    # Backwards compatibility for forecasting.py
     past_window["event_timestamp"] = past_window["timestamp"]
     
     return past_window

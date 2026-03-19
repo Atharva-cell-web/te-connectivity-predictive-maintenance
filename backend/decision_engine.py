@@ -1,5 +1,5 @@
-from safety_rules import check_safety_limits
-from ml_inference import predict_risk
+from backend.safety_rules import check_safety_limits
+from backend.ml_inference import predict_risk
 
 def make_decision(snapshot, model, X):
     ml_risk = predict_risk(model, X)

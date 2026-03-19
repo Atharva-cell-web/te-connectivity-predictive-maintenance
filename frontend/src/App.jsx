@@ -98,6 +98,7 @@ function GlobalHeader({
   onMachineChange,
   onTimeWindowChange,
   healthStatus,
+  isSensorFrozen,
 }) {
   const statusClass =
     healthStatus === "HIGH"
@@ -138,6 +139,11 @@ function GlobalHeader({
         <span className={`rounded-md border px-3 py-2 text-xs font-semibold ${statusClass}`}>
           STATUS: {healthStatus}
         </span>
+        {isSensorFrozen && (
+          <span className="rounded-md border border-orange-500 bg-orange-500/15 px-3 py-2 text-xs font-semibold text-orange-300">
+            SENSOR FROZEN
+          </span>
+        )}
       </div>
     </header>
   );
@@ -162,8 +168,6 @@ function SystemHealthMonitor({ timeline, riskScore }) {
   if (!chartData.length) {
     return <div className="flex h-64 items-center justify-center text-sm text-slate-400">No timeline data available.</div>;
   }
-
-
 
   return (
     <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
@@ -211,7 +215,11 @@ function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
     timeline.forEach((point, index) => { if (!point.is_future) lastPastIndex = index; });
 
     return timeline.map((point, index) => {
-      const val = toNumber(point.sensors?.[sensor]);
+      let val = toNumber(point.sensors?.[sensor]);
+      // Guard: reject garbage values that corrupt the Y-axis scale
+      if (val !== null && (!Number.isFinite(val) || Math.abs(val) > 5000)) {
+        val = null;
+      }
       const isTransition = index === lastPastIndex;
       return {
         timestamp: point.timestamp,
@@ -227,7 +235,7 @@ function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
   const maxLimit = toNumber(limits.max);
 
   const yDomain = useMemo(() => {
-    const values = chartData.map(d => d.rawValue).filter(v => v !== null);
+    const values = chartData.map(d => d.rawValue).filter(v => v !== null && Number.isFinite(v) && Math.abs(v) <= 5000);
     if (values.length === 0) return ['auto', 'auto'];
 
     const dataMin = Math.min(...values);
@@ -242,7 +250,6 @@ function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
     return [finalMin - padding, finalMax + padding];
   }, [chartData, minLimit, maxLimit]);
 
-  // All-systems-normal fallback when no sensor is selected
   if (!sensor) {
     return (
       <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
@@ -273,7 +280,13 @@ function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
             <XAxis dataKey="timestamp" tickFormatter={formatClock} tick={{ fill: "#94a3b8", fontSize: 11 }} label={{ value: 'Time', position: 'insideBottomRight', offset: -5, fill: '#94a3b8', fontSize: 12 }} />
 
-            <YAxis domain={yDomain} tick={{ fill: "#94a3b8", fontSize: 11 }} label={{ value: 'Sensor Value', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 12 }} />
+            <YAxis 
+              domain={yDomain} 
+              allowDataOverflow={true} 
+              tickFormatter={(val) => typeof val === 'number' ? val.toFixed(3) : val}
+              tick={{ fill: "#94a3b8", fontSize: 11 }} 
+              label={{ value: 'Sensor Value', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 12 }} 
+            />
 
             <Tooltip
               contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155", color: "#e2e8f0" }}
@@ -541,6 +554,31 @@ function App() {
     return past.length ? past[past.length - 1] : null;
   }, [timeline]);
 
+  const isSensorFrozen = useMemo(() => {
+    if (!latestPastPoint || !timeline.length) return false;
+    
+    // 1. Current risk must be > 0.8
+    const risk = toNumber(controlRoomData?.current_health?.risk_score) ?? 0;
+    if (risk <= 0.8) return false;
+
+    // 2. Future predictions must match current actuals perfectly
+    const trackedKeys = Object.keys(effectiveLimits);
+    if (trackedKeys.length === 0) return false;
+
+    const futurePoints = timeline.filter(p => p.is_future);
+    if (futurePoints.length === 0) return false;
+
+    const firstFuturePoint = futurePoints[0];
+    const pastSensors = latestPastPoint.sensors || {};
+    const futureSensors = firstFuturePoint.sensors || {};
+
+    return trackedKeys.every(k => {
+      const pastVal = toNumber(pastSensors[k]);
+      const futureVal = toNumber(futureSensors[k]);
+      return pastVal === futureVal;
+    });
+  }, [latestPastPoint, timeline, effectiveLimits, controlRoomData]);
+
   const latestSensors = latestPastPoint?.sensors || {};
   const breaches = useMemo(() => detectBreaches(latestSensors, effectiveLimits), [latestSensors, effectiveLimits]);
 
@@ -565,28 +603,12 @@ function App() {
     if (!timeline.length) {
       return [];
     }
-    const futurePenalty = breaches.length ? Math.min(0.2, breaches.length * 0.05) : 0;
-    let lastPastIndex = -1;
-    timeline.forEach((point, index) => {
-      if (!point.is_future) {
-        lastPastIndex = index;
-      }
-    });
-
-    return timeline.map((point, index) => {
-      let risk = toNumber(point.risk_score) ?? 0;
-      if (index === lastPastIndex) {
-        risk = Math.max(risk, adjustedRiskScore);
-      }
-      if (point.is_future) {
-        risk = Math.min(1, risk + futurePenalty);
-      }
-      return {
-        ...point,
-        risk_score: Number(risk.toFixed(4)),
-      };
-    });
-  }, [timeline, breaches.length, adjustedRiskScore]);
+    // Use risk_score exactly as returned by the backend — no UI mutations.
+    return timeline.map((point) => ({
+      ...point,
+      risk_score: Number((toNumber(point.risk_score) ?? 0).toFixed(4)),
+    }));
+  }, [timeline]);
 
   const summaryStats = useMemo(() => {
     const base = controlRoomData?.summary_stats || { past_scrap_detected: 0, future_scrap_predicted: 0 };
@@ -641,7 +663,6 @@ function App() {
     return statuses;
   }, [latestSensors, effectiveLimits]);
 
-  // Find the first abnormal sensor (critical first, then warning)
   const firstAbnormalSensor = useMemo(() => {
     const critical = Object.keys(telemetryStatuses).find(s => telemetryStatuses[s] === "critical");
     if (critical) return critical;
@@ -649,15 +670,18 @@ function App() {
     return warning || null;
   }, [telemetryStatuses]);
 
-  // Smart auto-switch: clear selection if sensor returned to normal
   useEffect(() => {
     if (selectedSensor && telemetryStatuses[selectedSensor] === "good") {
       setSelectedSensor(firstAbnormalSensor);
     }
   }, [telemetryStatuses, selectedSensor, firstAbnormalSensor]);
 
-  // Derive activeSensor: user selection > first abnormal > null (all normal)
-  const activeSensor = selectedSensor || firstAbnormalSensor;
+  // Fall back to the API's root_causes only if the machine is actually at risk (Medium/High)
+  // or if no telemetry abnormality is detected but the backend reports high risk (e.g., M-231 frozen).
+  // If risk is LOW and no sensors are abnormal, Section B should be completely empty.
+  const apiFirstRootCause = controlRoomData?.current_health?.root_causes?.[0] || null;
+  const isAtRisk = adjustedRiskScore >= 0.3;
+  const activeSensor = selectedSensor || firstAbnormalSensor || (isAtRisk ? apiFirstRootCause : null);
 
   if (loading && !controlRoomData) {
     return (
@@ -676,19 +700,17 @@ function App() {
           onMachineChange={setMachineId}
           onTimeWindowChange={setTimeWindowMinutes}
           healthStatus={currentHealth.status}
+          isSensorFrozen={isSensorFrozen}
         />
 
         {error && <div className="rounded-md border border-red-700 bg-red-950/50 px-4 py-2 text-sm text-red-200">{error}</div>}
 
-        {/* MAIN DASHBOARD GRID */}
         <div className="grid grid-cols-12 gap-4">
 
-          {/* Section A: Full Width Top */}
           <div className="col-span-12">
             <SystemHealthMonitor timeline={displayTimeline} riskScore={currentHealth.risk_score} />
           </div>
 
-          {/* Section B & C: Stacked vertically full width */}
           <div className="col-span-12 flex flex-col">
             <RootCauseAnalyzer timeline={displayTimeline} sensor={activeSensor} safeLimits={effectiveLimits} />
           </div>
@@ -704,7 +726,6 @@ function App() {
             />
           </div>
 
-          {/* Section D: Full Width Bottom */}
           <div className="col-span-12 mt-2">
             <PredictionSummary summaryStats={summaryStats} timeline={displayTimeline} />
           </div>
