@@ -69,3 +69,44 @@ git push -u origin main
 ```
 
 Because `.gitignore` is configured, large training/raw data and `node_modules` are excluded.
+
+## Automatic project sync
+
+If you want one command to stage changes, create a timestamped commit, pull, and push:
+
+```powershell
+.\sync_project.cmd
+```
+
+This repo also has local Git aliases configured:
+
+```powershell
+git autosync
+git autosync-dry
+git autosync-staged
+```
+
+You can also preview what will be committed without changing Git state:
+
+```powershell
+.\sync_project.cmd -DryRun
+```
+
+If you want a custom commit message:
+
+```powershell
+.\sync_project.cmd -Message "cleanup old scrap_prediction_v1 files"
+```
+
+If you only want to commit the files that are already staged in Source Control:
+
+```powershell
+.\sync_project.cmd -UseCurrentStaging
+```
+
+The same command is available through npm:
+
+```powershell
+npm run sync:auto
+npm run sync:auto:dry
+```
