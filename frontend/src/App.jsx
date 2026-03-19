@@ -163,8 +163,6 @@ function SystemHealthMonitor({ timeline, riskScore }) {
     return <div className="flex h-64 items-center justify-center text-sm text-slate-400">No timeline data available.</div>;
   }
 
-
-
   return (
     <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
       <div className="mb-3 flex items-center justify-between">
@@ -242,7 +240,6 @@ function RootCauseAnalyzer({ timeline, sensor, safeLimits }) {
     return [finalMin - padding, finalMax + padding];
   }, [chartData, minLimit, maxLimit]);
 
-  // All-systems-normal fallback when no sensor is selected
   if (!sensor) {
     return (
       <section className="rounded-xl border border-slate-700 bg-slate-900/70 p-4">
@@ -641,7 +638,6 @@ function App() {
     return statuses;
   }, [latestSensors, effectiveLimits]);
 
-  // Find the first abnormal sensor (critical first, then warning)
   const firstAbnormalSensor = useMemo(() => {
     const critical = Object.keys(telemetryStatuses).find(s => telemetryStatuses[s] === "critical");
     if (critical) return critical;
@@ -649,14 +645,12 @@ function App() {
     return warning || null;
   }, [telemetryStatuses]);
 
-  // Smart auto-switch: clear selection if sensor returned to normal
   useEffect(() => {
     if (selectedSensor && telemetryStatuses[selectedSensor] === "good") {
       setSelectedSensor(firstAbnormalSensor);
     }
   }, [telemetryStatuses, selectedSensor, firstAbnormalSensor]);
 
-  // Derive activeSensor: user selection > first abnormal > null (all normal)
   const activeSensor = selectedSensor || firstAbnormalSensor;
 
   if (loading && !controlRoomData) {
@@ -680,15 +674,12 @@ function App() {
 
         {error && <div className="rounded-md border border-red-700 bg-red-950/50 px-4 py-2 text-sm text-red-200">{error}</div>}
 
-        {/* MAIN DASHBOARD GRID */}
         <div className="grid grid-cols-12 gap-4">
 
-          {/* Section A: Full Width Top */}
           <div className="col-span-12">
             <SystemHealthMonitor timeline={displayTimeline} riskScore={currentHealth.risk_score} />
           </div>
 
-          {/* Section B & C: Stacked vertically full width */}
           <div className="col-span-12 flex flex-col">
             <RootCauseAnalyzer timeline={displayTimeline} sensor={activeSensor} safeLimits={effectiveLimits} />
           </div>
@@ -704,7 +695,6 @@ function App() {
             />
           </div>
 
-          {/* Section D: Full Width Bottom */}
           <div className="col-span-12 mt-2">
             <PredictionSummary summaryStats={summaryStats} timeline={displayTimeline} />
           </div>

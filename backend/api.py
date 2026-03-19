@@ -9,10 +9,9 @@ from datetime import datetime
 
 app = FastAPI()
 
-# Allow React to talk to this backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allows any frontend to connect
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -20,9 +19,6 @@ app.add_middleware(
 
 @app.get("/api/status/{machine_id}")
 def get_machine_status(machine_id: str):
-    """
-    Returns the exact JSON object needed for Zone A & Zone C
-    """
     try:
         decision = run(machine_id)
         return decision
@@ -37,10 +33,6 @@ def get_control_room_data(
     time_window: int = Query(default=240, ge=30, le=1440),
     future_window: int = Query(default=35, ge=5, le=60),
 ):
-    """
-    Returns a unified payload for Control Room sections:
-    machine info, summary stats, health state, timeline, and safe limits.
-    """
     try:
         print(f"[REQUEST] Machine: {machine_id} | Time: {datetime.now().strftime('%H:%M:%S')} | Future: {future_window}m", flush=True)
         result = build_control_room_payload(machine_id=machine_id, time_window=time_window, future_window=future_window)
@@ -56,15 +48,9 @@ def get_control_room_data(
 
 @app.get("/api/trend/{machine_id}/{parameter}")
 def get_trend_data(machine_id: str, parameter: str):
-    """
-    Returns the exact JSON needed for Zone B (History + Prediction + Limits)
-    """
     try:
-        # 1. Get Real History (Last 30 mins)
         history_df = get_recent_window(machine_id, minutes=30)
         
-        # --- FIX: Column Name Mapping ---
-        # The frontend asks for "Injection_pressure", but the file might have "Injection_pressure__last_5m"
         target_col = parameter
         if parameter not in history_df.columns:
             possible_name = f"{parameter}__last_5m"
@@ -74,21 +60,14 @@ def get_trend_data(machine_id: str, parameter: str):
                 print(f"❌ Column not found: {parameter}. Available: {list(history_df.columns)[:5]}...")
                 raise HTTPException(status_code=404, detail=f"Parameter '{parameter}' not found in dataset")
 
-        # --- OPTIMIZATION: Downsample to prevent browser crash ---
-        # Take 1 row every 30 rows (approx every 30s)
         if len(history_df) > 1000:
             history_df = history_df.iloc[::30, :].copy()
 
-        # 2. Generate Forecast
-        # We pass the CORRECT column name found above and the whole DF
         forecast_df = generate_forecast(history_df, target_col)
         
-        # --- FIX: Lock Timestamp format to prevent browser IST conversion ---
         if 'timestamp' in forecast_df.columns:
-            # Convert datetime to a strict string format: YYYY-MM-DD HH:MM:SS
             forecast_df['timestamp'] = forecast_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
         
-        # 3. Get Limits
         limits = SAFE_LIMITS.get(parameter, {})
         
         return {
@@ -102,3 +81,22 @@ def get_trend_data(machine_id: str, parameter: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
+
+from typing import Dict, Any, Optional
+
+@app.post("/api/predict/live")
+async def predict_live(data: Dict[str, Any]):
+    from backend.live_predictor import predict_from_raw
+    machine_id = data.pop("machine_id", "UNKNOWN")
+    return predict_from_raw(machine_id, data)
+
+@app.get("/api/predict/buffer-status")
+async def buffer_status(machine_id: Optional[str] = None):
+    from backend.live_predictor import get_buffer_status
+    return get_buffer_status(machine_id)
+
+@app.post("/api/predict/clear-buffer")
+async def clear_buf(machine_id: Optional[str] = None):
+    from backend.live_predictor import clear_buffer
+    clear_buffer(machine_id)
+    return {"status": "cleared"}

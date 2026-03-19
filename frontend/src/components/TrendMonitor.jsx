@@ -14,7 +14,6 @@ const TrendMonitor = ({ machineId, parameter }) => {
       try {
         const response = await axios.get(`http://127.0.0.1:8080/api/trend/${machineId}/${parameter}`);
         
-        // Format timestamp for display (HH:MM)
         const formattedData = response.data.data.map(d => ({
           ...d,
           time: new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -29,7 +28,7 @@ const TrendMonitor = ({ machineId, parameter }) => {
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 5000); // Live refresh
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [machineId, parameter]);
 
@@ -55,7 +54,6 @@ const TrendMonitor = ({ machineId, parameter }) => {
               labelStyle={{ color: '#fff' }}
             />
             
-            {/* Safe Limits (Red Lines) */}
             {limits.max && (
               <ReferenceLine y={limits.max} stroke="#FF5252" strokeDasharray="5 5" label={{ value: 'MAX', fill: '#FF5252', fontSize: 10 }} />
             )}
@@ -63,7 +61,6 @@ const TrendMonitor = ({ machineId, parameter }) => {
               <ReferenceLine y={limits.min} stroke="#FF5252" strokeDasharray="5 5" label={{ value: 'MIN', fill: '#FF5252', fontSize: 10 }} />
             )}
 
-            {/* Historical Data (Solid Blue) */}
             <Line 
               type="monotone" 
               dataKey="value" 
