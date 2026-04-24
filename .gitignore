@@ -34,6 +34,11 @@ artifacts/
 metrics/
 ml_pipeline/
 scratch/
+*.csv
+*.parquet
+.env
+.env.*
+!.env.example
 pip
 cd
 

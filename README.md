@@ -97,11 +97,12 @@ graph LR
 > [!TIP]
 > This project is containerized for professional, one-click deployment.
 
-### ⛴️ Unified Deployment (Quickstart)
-To launch the entire V5 suite (Backend + Frontend + Nginx):
-```bash
-docker-compose up --build
+### 🚀 Quickstart: Run Development Environment
+To launch the entire suite (Backend + Frontend) simultaneously, open PowerShell in the project root and run:
+```powershell
+.\run-dev.ps1
 ```
+This script will start the FastAPI backend on port 8000 and the Vite React frontend concurrently.
 
 ---
 
