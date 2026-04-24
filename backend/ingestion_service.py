@@ -30,32 +30,35 @@ def _resolve_target_dir(target_dir: Path | None = None) -> Path:
     """Resolve the ingestion folder once so validation and processing stay aligned."""
     return target_dir or get_latest_dated_folder() or RAW_DIR
 
+# ── Module-level helper (accessible from ALL functions) ──────────
+def _classify_file(path) -> str:
+    """Classify a file as Hydra, MSE, Param, or Other based on name/content."""
+    name = path.name.lower()
+    if "param" in name: return "Param"
+    if "mse" in name: return "MSE"
+
+    # Adaptive Sniffing: peek columns if ambiguous
+    try:
+        if path.suffix.lower() == ".csv":
+            peek = pd.read_csv(path, nrows=0)
+            if "variable_name" in peek.columns and "value" in peek.columns:
+                return "MSE"
+        elif path.suffix.lower() in [".xlsx", ".xls"]:
+            peek = pd.read_excel(path, nrows=0)
+            if any(c in peek.columns for c in ["machine_event_create_date", "cycle_time"]):
+                return "Hydra"
+    except Exception:
+        pass
+
+    if path.suffix.lower() == ".csv": return "MSE"
+    if path.suffix.lower() in [".xls", ".xlsx"]: return "Hydra"
+    return "Other"
+
+
 def get_ingestion_history():
     """Returns a list of files currently in the raw_data directory."""
     if not RAW_DIR.exists():
         return []
-    
-    def _classify_file(path: Path) -> str:
-        name = path.name.lower()
-        if "param" in name: return "Param"
-        if "mse" in name: return "MSE"
-        
-        # Adaptive Sniffing: Peak columns if ambiguous
-        try:
-            if path.suffix.lower() == ".csv":
-                peek = pd.read_csv(path, nrows=0)
-                if "variable_name" in peek.columns and "value" in peek.columns:
-                    return "MSE"
-            elif path.suffix.lower() in [".xlsx", ".xls"]:
-                peek = pd.read_excel(path, nrows=0)
-                if any(c in peek.columns for c in ["machine_event_create_date", "cycle_time"]):
-                    return "Hydra"
-        except Exception:
-            pass
-
-        if "csv" in name: return "MSE"
-        if "xls" in name or "xlsx" in name: return "Hydra"
-        return "Other"
 
     def _extract_machine_label(path: Path) -> str:
         machine = normalize_machine_id(path.name)
@@ -84,6 +87,7 @@ def get_ingestion_history():
                     "folder": scan_dir.name
                 })
     return sorted(files, key=lambda x: x['timestamp'], reverse=True)
+
 
 def get_latest_dated_folder() -> Path | None:
     """Finds the folder with the highest index or latest date matching 'new data='."""

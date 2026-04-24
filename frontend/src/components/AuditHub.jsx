@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { 
-  CheckCircle2, XCircle, ShieldCheck, Target, BarChart, 
-  AlertTriangle, Search, Plus, Trash2, Edit2, Save, X, 
+import {
+  CheckCircle2, XCircle, ShieldCheck, Target, BarChart,
+  AlertTriangle, Search, Plus, Trash2, Edit2, Save, X,
   ChevronRight, Calendar, Clock, MessageSquare, Monitor, Activity
 } from "lucide-react";
 import apiClient from "../utils/apiClient";
@@ -13,7 +13,7 @@ export default function AuditHub({ onReplayAnomaly }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingIndex, setEditingIndex] = useState(null);
   const [saving, setSaving] = useState(false);
-  
+
   // Explicitly generate DD-MM-YYYY
   const today = new Date();
   const d = String(today.getDate()).padStart(2, '0');
@@ -53,17 +53,31 @@ export default function AuditHub({ onReplayAnomaly }) {
     if (e) e.preventDefault();
 
     // Production Validation: Ensure mandatory fields are populated
-    if (!formState.machine || !formState.date || !formState.id) {
-      alert("⚠️ VERIFICATION REQUIRED:\nPlease ensure Machine Identifier, Audit Date, and Case Reference are fully filled out before committing.");
+    if (!formState.machine || !formState.date || !formState.id || !formState.start) {
+      alert("⚠️ VERIFICATION REQUIRED:\nPlease ensure Machine Identifier, Audit Date, Case Reference, and Start Interval are fully filled out before committing.");
       return;
     }
+
+    // Automatically enforce 30 minute machine learning forecast window
+    let computedEnd = formState.end;
+    try {
+      const [hours, mins] = formState.start.split(':').map(Number);
+      const totalMins = hours * 60 + mins + 30;
+      const endHours = Math.floor(totalMins / 60) % 24;
+      const endMins = totalMins % 60;
+      computedEnd = `${String(endHours).padStart(2, '0')}:${String(endMins).padStart(2, '0')}`;
+    } catch (err) {
+      computedEnd = formState.start;
+    }
+
+    const payload = { ...formState, end: computedEnd };
 
     try {
       setSaving(true);
       if (editingIndex !== null) {
-        await apiClient.put(`/api/audit/case/${editingIndex}`, formState);
+        await apiClient.put(`/api/audit/case/${editingIndex}`, payload);
       } else {
-        await apiClient.post("/api/audit/case", formState);
+        await apiClient.post("/api/audit/case", payload);
       }
       fetchAudit();
       resetForm();
@@ -138,8 +152,8 @@ export default function AuditHub({ onReplayAnomaly }) {
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ground-Truth Registry Control</p>
           </div>
         </div>
-        
-        <button 
+
+        <button
           onClick={() => { resetForm(); setShowAddForm(true); }}
           className="flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-slate-800 transition-all shadow-xl shadow-slate-900/10 active:scale-95"
         >
@@ -169,8 +183,8 @@ export default function AuditHub({ onReplayAnomaly }) {
         </div>
         <div className="glass-card p-6 bg-slate-900 text-white border-0">
           <div className="flex items-center justify-between mb-2">
-             <p className="text-[9px] font-black uppercase tracking-widest text-brand-400">Total Scenarios</p>
-             <BarChart size={14} className="text-brand-400" />
+            <p className="text-[9px] font-black uppercase tracking-widest text-brand-400">Total Scenarios</p>
+            <BarChart size={14} className="text-brand-400" />
           </div>
           <span className="text-3xl font-black">{results.length}</span>
           <p className="mt-1 text-[9px] font-bold text-slate-400 uppercase">Active audit registry entries</p>
@@ -204,11 +218,11 @@ export default function AuditHub({ onReplayAnomaly }) {
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1.5 block">Machine Identifier</label>
                   <div className="relative">
                     <Monitor size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" />
-                    <input 
+                    <input
                       className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all"
                       placeholder="e.g. M356 *"
                       value={formState.machine}
-                      onChange={e => setFormState({...formState, machine: e.target.value.toUpperCase()})}
+                      onChange={e => setFormState({ ...formState, machine: e.target.value.toUpperCase() })}
                     />
                   </div>
                 </div>
@@ -218,22 +232,22 @@ export default function AuditHub({ onReplayAnomaly }) {
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1.5 block">Audit Date (dd-mm-yyyy)</label>
                     <div className="relative">
                       <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" />
-                      <input 
+                      <input
                         type="text"
                         className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all"
                         placeholder="e.g. 14-02-2026 *"
                         value={formState.date}
-                        onChange={e => setFormState({...formState, date: e.target.value})}
+                        onChange={e => setFormState({ ...formState, date: e.target.value })}
                       />
                     </div>
                   </div>
                   <div>
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1.5 block">Case Reference</label>
-                    <input 
+                    <input
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all"
                       placeholder="e.g. Scrap Case #1 *"
                       value={formState.id}
-                      onChange={e => setFormState({...formState, id: e.target.value})}
+                      onChange={e => setFormState({ ...formState, id: e.target.value })}
                     />
                   </div>
                 </div>
@@ -243,23 +257,23 @@ export default function AuditHub({ onReplayAnomaly }) {
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1.5 block">Start Interval</label>
                     <div className="relative">
                       <Clock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" />
-                      <input 
+                      <input
                         type="time"
                         className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all"
                         value={formState.start}
-                        onChange={e => setFormState({...formState, start: e.target.value})}
+                        onChange={e => setFormState({ ...formState, start: e.target.value })}
                       />
                     </div>
                   </div>
                   <div>
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1.5 block">End Interval</label>
                     <div className="relative">
-                      <Clock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" />
-                      <input 
-                        type="time"
-                        className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all"
-                        value={formState.end}
-                        onChange={e => setFormState({...formState, end: e.target.value})}
+                      <Clock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        disabled
+                        className="w-full pl-10 pr-4 py-3 bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-500 cursor-not-allowed"
+                        value="+ 30M Forecast Window"
                       />
                     </div>
                   </div>
@@ -269,32 +283,32 @@ export default function AuditHub({ onReplayAnomaly }) {
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1.5 block">Operational Comment</label>
                   <div className="relative">
                     <MessageSquare size={14} className="absolute left-3 top-4 text-slate-300" />
-                    <textarea 
+                    <textarea
                       rows={3}
                       className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all resize-none"
                       placeholder="Machine stability observations..."
                       value={formState.comment}
-                      onChange={e => setFormState({...formState, comment: e.target.value})}
+                      onChange={e => setFormState({ ...formState, comment: e.target.value })}
                     />
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 p-4 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                   <input 
-                     type="checkbox" 
-                     id="ignore-check"
-                     className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                     checked={formState.ignore}
-                     onChange={e => setFormState({...formState, ignore: e.target.checked})}
-                   />
-                   <label htmlFor="ignore-check" className="text-[10px] font-black text-slate-500 uppercase tracking-widest cursor-pointer">
-                     Exclude from accuracy metrics (Ignore)
-                   </label>
+                  <input
+                    type="checkbox"
+                    id="ignore-check"
+                    className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                    checked={formState.ignore}
+                    onChange={e => setFormState({ ...formState, ignore: e.target.checked })}
+                  />
+                  <label htmlFor="ignore-check" className="text-[10px] font-black text-slate-500 uppercase tracking-widest cursor-pointer">
+                    Exclude from accuracy metrics (Ignore)
+                  </label>
                 </div>
               </div>
 
               <div className="pt-4 space-y-3 pb-8">
-                <button 
+                <button
                   type="submit"
                   disabled={saving}
                   className={`w-full py-4 bg-slate-900 text-white rounded-xl text-xs font-black uppercase tracking-[0.25em] shadow-xl shadow-slate-900/10 hover:bg-black transition-all active:scale-95 flex items-center justify-center gap-2 ${saving ? 'opacity-70 cursor-not-allowed' : ''}`}
@@ -306,7 +320,7 @@ export default function AuditHub({ onReplayAnomaly }) {
                   )}
                   {saving ? "Processing..." : (editingIndex !== null ? "Update Registry" : "Commit to Audit")}
                 </button>
-                <button 
+                <button
                   type="button"
                   onClick={resetForm}
                   className="w-full py-4 bg-white text-slate-400 border border-slate-100 rounded-xl text-[10px] font-black uppercase tracking-[0.25em] hover:bg-slate-50 transition-all"
@@ -332,7 +346,7 @@ export default function AuditHub({ onReplayAnomaly }) {
             </span>
           </div>
         </div>
-        
+
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[1000px]">
             <thead>
@@ -399,43 +413,43 @@ export default function AuditHub({ onReplayAnomaly }) {
                     </td>
                     <td className="px-6 py-5 text-right">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button 
+                        <button
                           onClick={() => {
                             try {
-                                // Senior Pro Fix: Robust parsing for DD-MM-YYYY or YYYY-MM-DD
-                                const parts = row.date.split(/[-/]/);
-                                let y, m, d;
-                                if (parts.length === 3) {
-                                  if (parts[2].length === 4) {
-                                    [d, m, y] = parts;
-                                  } else {
-                                    [y, m, d] = parts;
-                                  }
-                                  // Ensure 2-digit padding
-                                  m = m.padStart(2, '0');
-                                  d = d.padStart(2, '0');
-                                  
-                                  const isoStr = `${y}-${m}-${d}T${row.start}:00Z`;
-                                  const startTs = new Date(isoStr).getTime();
-                                  onReplayAnomaly(row.machine, startTs);
+                              // Senior Pro Fix: Robust parsing for DD-MM-YYYY or YYYY-MM-DD
+                              const parts = row.date.split(/[-/]/);
+                              let y, m, d;
+                              if (parts.length === 3) {
+                                if (parts[2].length === 4) {
+                                  [d, m, y] = parts;
+                                } else {
+                                  [y, m, d] = parts;
                                 }
-                              } catch (e) {
-                                console.error("Could not parse date for replay jump", e);
+                                // Ensure 2-digit padding
+                                m = m.padStart(2, '0');
+                                d = d.padStart(2, '0');
+
+                                const isoStr = `${y}-${m}-${d}T${row.start}:00Z`;
+                                const startTs = new Date(isoStr).getTime();
+                                onReplayAnomaly(row.machine, startTs);
                               }
+                            } catch (e) {
+                              console.error("Could not parse date for replay jump", e);
+                            }
                           }}
                           className={`p-2 rounded-lg transition-colors ${!isIgnore && row.start !== "N/A" ? 'text-brand-600 hover:bg-brand-50' : 'text-slate-300 cursor-not-allowed'}`}
                           title="View on Dashboard"
                         >
                           <Activity size={16} />
                         </button>
-                        <button 
+                        <button
                           onClick={() => startEdit(currentIndex, row)}
                           className="p-2 hover:bg-indigo-50 rounded-lg text-indigo-500 transition-colors"
                           title="Edit Row"
                         >
                           <Edit2 size={16} />
                         </button>
-                        <button 
+                        <button
                           onClick={() => handleDelete(currentIndex)}
                           className="p-2 hover:bg-red-50 rounded-lg text-red-500 transition-colors"
                           title="Remove Row"

@@ -1,58 +1,83 @@
 [
   {
-    "id": "High-Fidelity Case 1",
-    "machine": "M356",
-    "date": "01-10-2025",
-    "start": "06:01",
-    "end": "06:03",
-    "comment": "Authentic 'Senior Pro' match directly from master dataset."
+    "machine": "M-356",
+    "date": "30-03-2026",
+    "id": "Scrap case 1",
+    "start": "16:57",
+    "end": "17:27",
+    "comment": "",
+    "ignore": false
   },
   {
-    "id": "High-Fidelity Case 2",
-    "machine": "M356",
-    "date": "01-10-2025",
-    "start": "06:02",
-    "end": "06:04",
-    "comment": "Authentic 'Senior Pro' match directly from master dataset."
+    "machine": "M-356",
+    "date": "30-03-2026",
+    "id": "Scrap Test 2",
+    "start": "18:00",
+    "end": "18:30",
+    "comment": "",
+    "ignore": false
   },
   {
-    "id": "High-Fidelity Case 3",
-    "machine": "M356",
-    "date": "01-10-2025",
-    "start": "06:03",
-    "end": "06:05",
-    "comment": "Authentic 'Senior Pro' match directly from master dataset."
+    "machine": "M-356",
+    "date": "30-03-2026",
+    "id": "Scrap case 3",
+    "start": "19:00",
+    "end": "19:30",
+    "comment": "",
+    "ignore": false
   },
   {
-    "id": "High-Fidelity Case 4",
-    "machine": "M356",
-    "date": "01-10-2025",
-    "start": "06:04",
-    "end": "06:06",
-    "comment": "Authentic 'Senior Pro' match directly from master dataset."
+    "machine": "M607",
+    "date": "14-03-2026",
+    "id": "Scrap case 4",
+    "start": "06:00",
+    "end": "06:30",
+    "comment": "",
+    "ignore": false
   },
   {
-    "id": "High-Fidelity Case 5",
-    "machine": "M356",
-    "date": "01-10-2025",
-    "start": "06:05",
-    "end": "06:07",
-    "comment": "Authentic 'Senior Pro' match directly from master dataset."
+    "machine": "M607",
+    "date": "14-03-2026",
+    "id": "Scrap case 5",
+    "start": "10:15",
+    "end": "10:45",
+    "comment": "",
+    "ignore": false
   },
   {
-    "id": "High-Fidelity Case 6",
-    "machine": "M356",
-    "date": "01-10-2025",
-    "start": "06:09",
-    "end": "06:11",
-    "comment": "Authentic 'Senior Pro' match directly from master dataset."
+    "machine": "M607",
+    "date": "14-03-2026",
+    "id": "Scrap case 6",
+    "start": "19:30",
+    "end": "20:00",
+    "comment": "",
+    "ignore": false
   },
   {
-    "id": "High-Fidelity Case 7",
-    "machine": "M356",
-    "date": "01-10-2025",
-    "start": "06:10",
-    "end": "06:12",
-    "comment": "Authentic 'Senior Pro' match directly from master dataset."
+    "machine": "M612",
+    "date": "01-04-2026",
+    "id": "Scrap case 7",
+    "start": "06:00",
+    "end": "06:30",
+    "comment": "",
+    "ignore": false
+  },
+  {
+    "machine": "M612",
+    "date": "01-04-2026",
+    "id": "scrap case 8",
+    "start": "09:30",
+    "end": "10:00",
+    "comment": "",
+    "ignore": false
+  },
+  {
+    "machine": "M612",
+    "date": "01-04-2026",
+    "id": "Scrap case 9",
+    "start": "14:01",
+    "end": "14:31",
+    "comment": "",
+    "ignore": false
   }
 ]

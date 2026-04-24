@@ -187,7 +187,15 @@ def get_audit_validation():
 async def add_audit_case(case: Dict[str, Any]):
     """Add a new ground-truth record."""
     print(f"DEBUG: Received audit case: {case}")
-    current = get_audit_validation_results().get("results", [])
+    # CRITICAL FIX: Read the RAW audit_cases.json directly instead of calling
+    # get_audit_validation_results(), which can crash if the parquet file is
+    # missing expected columns (scrap_5m, etc.), returning an empty list and
+    # causing previously saved cases to disappear.
+    audit_path = Path(__file__).resolve().parent / "audit_cases.json"
+    try:
+        current = json.loads(audit_path.read_text(encoding="utf-8")) if audit_path.exists() else []
+    except Exception:
+        current = []
     current.append(case)
     if save_audit_cases(current):
         print("DEBUG: Audit case saved successfully")
@@ -198,7 +206,11 @@ async def add_audit_case(case: Dict[str, Any]):
 @app.put("/api/audit/case/{index}", dependencies=[Depends(verify_token)]) # Standardized to singular to match frontend
 async def update_audit_case(index: int, case: Dict[str, Any]):
     """Update an existing ground-truth record."""
-    results = get_audit_validation_results().get("results", [])
+    audit_path = Path(__file__).resolve().parent / "audit_cases.json"
+    try:
+        results = json.loads(audit_path.read_text(encoding="utf-8")) if audit_path.exists() else []
+    except Exception:
+        results = []
     if index < 0 or index >= len(results):
         raise HTTPException(status_code=404, detail="Audit case index out of range")
     
@@ -211,7 +223,11 @@ async def update_audit_case(index: int, case: Dict[str, Any]):
 @app.delete("/api/audit/case/{index}", dependencies=[Depends(verify_token)])
 async def delete_audit_case(index: int):
     """Remove a ground-truth record."""
-    results = get_audit_validation_results().get("results", [])
+    audit_path = Path(__file__).resolve().parent / "audit_cases.json"
+    try:
+        results = json.loads(audit_path.read_text(encoding="utf-8")) if audit_path.exists() else []
+    except Exception:
+        results = []
     if index < 0 or index >= len(results):
         raise HTTPException(status_code=404, detail="Audit case index out of range")
     

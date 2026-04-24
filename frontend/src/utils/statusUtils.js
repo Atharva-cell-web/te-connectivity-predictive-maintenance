@@ -26,14 +26,14 @@ export const mapStatus = (rawStatus, riskScore = null) => {
   }
 
   if (!effectiveStatus && effectiveRisk === null) return UI_STATUS.NORMAL;
-  
+
   const status = String(effectiveStatus || "").toUpperCase().trim();
-  
+
   if (status === "EXCEEDED" || status === "CRITICAL" || status === "ERROR") return UI_STATUS.CRITICAL;
   if (status === "WARNING" || status === "ALERT") return UI_STATUS.WARNING;
   if (status === "WATCH") return UI_STATUS.WATCH;
   if (status === "HIGH") return UI_STATUS.HIGH;
-  
+
   // Fallback to risk score if status is normal, missing, or unrecognized
   const numericRisk = Number(effectiveRisk);
   if (effectiveRisk !== null && !Number.isNaN(numericRisk)) {
@@ -41,7 +41,7 @@ export const mapStatus = (rawStatus, riskScore = null) => {
     if (numericRisk >= 0.6) return UI_STATUS.HIGH;
     if (numericRisk >= 0.35) return UI_STATUS.WATCH;
   }
-  
+
   return UI_STATUS.NORMAL;
 };
 
@@ -105,10 +105,10 @@ export const SENSOR_METADATA = {
 
 export const formatSensorName = (sensor) => {
   const normKey = String(sensor || "").toLowerCase().replace(/ /g, "_");
-  
+
   // Also try exact match for edge cases
   if (SENSOR_METADATA[normKey]) return SENSOR_METADATA[normKey].label;
-  
+
   // Try to find matching key even if slightly different
   const matchedKey = Object.keys(SENSOR_METADATA).find(k => k === normKey || normKey.includes(k) || k.includes(normKey));
   if (matchedKey) return SENSOR_METADATA[matchedKey].label;
@@ -123,12 +123,12 @@ export const formatSensorName = (sensor) => {
  */
 export const getSensorCategory = (key) => {
   const normKey = String(key || "").toLowerCase();
-  
+
   if (SENSOR_METADATA[normKey]) return SENSOR_METADATA[normKey].source;
-  
+
   if (normKey.includes("temp") || normKey.includes("tmp")) return "TEMPERATURE";
   if (normKey.includes("press")) return "PRESSURE";
   if (normKey.includes("time")) return "TIMING";
-  
+
   return "PROCESS";
 };

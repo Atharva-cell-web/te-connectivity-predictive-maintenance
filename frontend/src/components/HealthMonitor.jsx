@@ -76,9 +76,9 @@ export default function HealthMonitor({ timeline, riskScore, auditAreas = [] }) 
   const riskBand = useMemo(() => {
     // Explicitly pass riskScore to the second argument for robust mapping
     const status = mapStatus(null, riskScore);
-    return { 
-      label: status, 
-      tone: getStatusBadgeClass(status) 
+    return {
+      label: status,
+      tone: getStatusBadgeClass(status)
     };
   }, [riskScore]);
 
@@ -164,25 +164,25 @@ export default function HealthMonitor({ timeline, riskScore, auditAreas = [] }) 
             <ReferenceArea y1={0.35} y2={0.6} fill="#f59e0b" fillOpacity={0.05} strokeOpacity={0} />
             <ReferenceArea y1={0.6} y2={0.8} fill="#f97316" fillOpacity={0.05} strokeOpacity={0} />
             <ReferenceArea y1={0.8} y2={1} fill="#ef4444" fillOpacity={0.05} strokeOpacity={0} />
-            
+
             {/* Senior Feature: Ground-Truth Scrap Events Overlays */}
             {auditAreas.map((area, idx) => (
-              <ReferenceArea 
-                key={`audit-${idx}`} 
-                x1={area.start} 
-                x2={area.end} 
-                fill="#ec4899" 
-                fillOpacity={0.12} 
-                strokeOpacity={0} 
-                label={{ 
-                  value: area.id, 
-                  position: 'insideTopLeft', 
-                  fill: '#be185d', 
-                  fontSize: 10, 
-                  fontWeight: '900', 
+              <ReferenceArea
+                key={`audit-${idx}`}
+                x1={area.start}
+                x2={area.end}
+                fill="#ec4899"
+                fillOpacity={0.12}
+                strokeOpacity={0}
+                label={{
+                  value: area.id,
+                  position: 'insideTopLeft',
+                  fill: '#be185d',
+                  fontSize: 10,
+                  fontWeight: '900',
                   opacity: 0.8,
                   offset: 15
-                }} 
+                }}
               />
             ))}
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -259,10 +259,10 @@ export default function HealthMonitor({ timeline, riskScore, auditAreas = [] }) 
                 stroke="#94a3b8"
                 strokeWidth={2}
                 strokeDasharray="4 4"
-                label={{ 
-                  value: "Prediction boundary", 
-                  fill: "#475569", 
-                  fontSize: 11, 
+                label={{
+                  value: "Prediction boundary",
+                  fill: "#475569",
+                  fontSize: 11,
                   fontWeight: 800,
                   position: "top",
                   offset: 15,

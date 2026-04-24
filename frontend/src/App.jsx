@@ -306,13 +306,18 @@ function App() {
     
     const targetId = canonical?.id || machineRef;
     
-    // Set anchor time to 15 minutes before the scrap starts
-    const paddedAnchor = new Date(startTs - 15 * 60 * 1000).toISOString();
+    // Set anchor time (the split between past/future).
+    // If the user's starting point is e.g. 5:00 PM: 
+    // Past window: 5:00 PM to 6:00 PM (60 mins)
+    // Future window: 6:00 PM to 6:30 PM (30 mins)
+    // Therefore, the anchor is start time + 60 minutes.
+    const anchorTimeMs = startTs + (60 * 60 * 1000);
+    const targetAnchor = new Date(anchorTimeMs).toISOString();
     
     setMachineId(targetId);
-    setAnchorTime(paddedAnchor);
-    setPastWindowMinutes(120);
-    setDraftPastWindowMinutes(120);
+    setAnchorTime(targetAnchor);
+    setPastWindowMinutes(60);
+    setDraftPastWindowMinutes(60);
     setFutureWindowMinutes(30);
     setDraftFutureWindowMinutes(30);
     
